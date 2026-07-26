@@ -25,9 +25,9 @@ from careshell.care_plan import CarePlanError, load_care_plan, med_catalog
 from careshell.extractor import DEFAULT_ENDPOINT, DEFAULT_MODEL, build_extractor
 from careshell.reconciler import CareReconciler
 from careshell.schemas import Decision, TimelineEntry
-from careshell.store import CareStore
+from careshell.store import CareStore, SchemaVersionError
 from careshell.stream import build_checkpoints, follow_timeline, paced
-from careshell.timeline import TimelineError, load_timeline
+from careshell.timeline import TimelineError, end_of_day, load_timeline
 
 CODE_MARKS = {
     "MED_ON_TIME": "ok",
@@ -134,6 +134,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.trust_keywords and not args.offline:
         print("[fatal] --trust-keywords only applies with --offline", file=sys.stderr)
         return 2
+    # Validate here rather than letting paced() raise mid-run: every other bad flag
+    # combination exits 2 with a [fatal] line, and this one should too.
+    if args.speed <= 0:
+        print("[fatal] --speed must be positive", file=sys.stderr)
+        return 2
+    if args.max_gap < 0:
+        print("[fatal] --max-gap cannot be negative", file=sys.stderr)
+        return 2
 
     extractor = build_extractor(
         args.offline, args.endpoint, args.model, args.timeout, args.trust_keywords
@@ -148,7 +156,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[careshell] mode: {mode}  source: {source}")
     print(f"[careshell] extractor: {'keyword (offline)' if args.offline else args.model}\n")
 
-    with CareStore(args.db) as store:
+    try:
+        store = CareStore(args.db)
+    except SchemaVersionError as exc:
+        print(f"[fatal] {exc}", file=sys.stderr)
+        return 2
+
+    with store:
         pipeline = Pipeline(plan, store, extractor, tts, lan, args.memory or None)
         try:
             if args.follow:
@@ -176,7 +190,7 @@ def _run_file(pipeline: Pipeline, plan: dict, source: str, args) -> int:
     if not args.stream:
         for entry in entries:
             pipeline.on_entry(entry)
-        pipeline.flush(_end_of_day(entries[-1].ts))
+        pipeline.flush(end_of_day(entries[-1].ts))
         return 0
 
     # Paced replay: walk entries merged with window-close moments.
@@ -203,29 +217,14 @@ def _run_follow(pipeline: Pipeline, plan: dict, args) -> int:
 
     if last is not None:
         # The feed stopped. Close out the remaining windows on the final observed day.
-        pipeline.flush(_end_of_day(last))
+        pipeline.flush(end_of_day(last))
     else:
         print("[careshell] no entries arrived before the idle timeout.")
     return 0
 
 
-def _end_of_day(ts: datetime) -> datetime:
-    """End of the last observed day.
-
-    Not `ts + 1 day`: advancing past midnight would fabricate MISSED_DOSE alerts for a
-    day the timeline says nothing about. Silence after the last observation is missing
-    data, not a missed dose.
-    """
-    return ts.replace(hour=23, minute=59, second=59, microsecond=0)
-
-
 def _print_adherence(store: CareStore, plan: dict) -> None:
-    rows = store.conn.execute(
-        """SELECT substr(ts, 1, 10) AS day, med_id, COUNT(*) AS doses
-           FROM doses WHERE patient_id = ?
-           GROUP BY day, med_id ORDER BY day DESC, med_id LIMIT 10""",
-        (plan["patient_id"],),
-    ).fetchall()
+    rows = store.recent_adherence(plan["patient_id"], limit=10)
     if not rows:
         print("[careshell] no doses recorded.")
         return

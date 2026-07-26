@@ -18,17 +18,19 @@ timestamps into one ordered list of checkpoints and walk that.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
-from pydantic import ValidationError
-
 from careshell.care_plan import parse_hhmm
 from careshell.schemas import TimelineEntry
+from careshell.timeline import end_of_day, parse_entry
+
+# A single line with no newline is buffered until one arrives. Cap it so a writer that
+# never terminates a line cannot grow the buffer without bound.
+MAX_PARTIAL_LINE_BYTES = 1 << 16
 
 
 @dataclass
@@ -60,10 +62,8 @@ def build_checkpoints(entries: list[TimelineEntry], plan: dict) -> list[Checkpoi
     """Merge entries with window-close moments into one ordered walk."""
     if not entries:
         return []
-    # End of the final observed day, not +24h: advancing past midnight would fabricate
-    # window closes for a day the timeline says nothing about.
     start = entries[0].ts
-    end = entries[-1].ts.replace(hour=23, minute=59, second=59, microsecond=0)
+    end = end_of_day(entries[-1].ts)
     points = [Checkpoint(e.ts, e) for e in entries]
     points += [Checkpoint(ts) for ts in window_closes(plan, start, end)]
     # Events sort before bare ticks at the same instant: a dose taken exactly at window
@@ -132,20 +132,15 @@ def follow_timeline(
             # A writer may flush a partial line; hold it until the newline arrives.
             if not chunk.endswith("\n"):
                 partial += chunk
+                if len(partial) > MAX_PARTIAL_LINE_BYTES:
+                    print(
+                        f"[warn] {path}: unterminated line exceeded "
+                        f"{MAX_PARTIAL_LINE_BYTES} bytes, discarding"
+                    )
+                    partial = ""
                 continue
             line, partial = partial + chunk, ""
 
-            if not line.strip():
-                continue
-            try:
-                entry = TimelineEntry(**json.loads(line))
-            except (json.JSONDecodeError, ValidationError, TypeError) as exc:
-                print(f"[warn] {path}: skipping malformed line: {exc}")
-                continue
-
-            if entry.id in seen:
-                continue
-            if patient_id and entry.patient_id != patient_id:
-                continue
-            seen.add(entry.id)
-            yield entry
+            entry = parse_entry(line, seen, patient_id, where=str(path))
+            if entry is not None:
+                yield entry

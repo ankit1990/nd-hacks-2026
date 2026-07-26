@@ -171,8 +171,16 @@ openshell/          policy delta for the NemoClaw sandbox
 deploy/             deploy.sh, preflight.sh, demo.sh
 tools/              feed_timeline.py — pushes a source file into a live feed
 workspace/          care_plan.yaml, careshell.db (SQLite), MEMORY.md
-tests/              93 tests; test_reconciler.py needs no GPU, model, or network
+tests/              123 tests; test_reconciler.py needs no GPU, model, or network
 ```
+
+### Timestamps
+
+`TimelineEntry` normalises any offset-bearing `ts` (`...Z`, `+05:30`) to a naive,
+facility-local wall clock at the schema boundary. Medication windows are wall-clock
+times, and everything downstream compares against `datetime.combine` results, which are
+naive — mixing the two raises `TypeError`. Normalising once at ingestion means a sensor
+bridge emitting UTC cannot crash the run.
 
 ### Why SQLite
 

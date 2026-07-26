@@ -16,10 +16,19 @@ sorts and compares correctly as text.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
+from typing import Iterator
 
 from careshell.schemas import CareEvent, Decision, TimelineEntry
+
+# Bumped whenever the shape of an existing table changes. `CREATE TABLE IF NOT EXISTS`
+# silently no-ops against an older database, so without this check the first query
+# referencing a new column fails with an opaque "no such column" at runtime.
+SCHEMA_VERSION = 1
+
+MAX_HISTORY_ROWS = 500
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -64,6 +73,10 @@ CREATE INDEX IF NOT EXISTS idx_decisions_patient_ts ON decisions (patient_id, ts
 """
 
 
+class SchemaVersionError(RuntimeError):
+    """Raised when an existing database was written by a different schema version."""
+
+
 class CareStore:
     """File-backed history. Safe to open repeatedly against the same path."""
 
@@ -72,9 +85,63 @@ class CareStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), isolation_level=None)
         self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(SCHEMA)
+        self._depth = 0
+        try:
+            self.conn.executescript(SCHEMA)
+            self._check_version()
+        except BaseException:
+            self.conn.close()      # never leak the handle on a failed open
+            raise
+
+    def _check_version(self) -> None:
+        """Fail loudly on a schema mismatch rather than at some later query."""
+        found = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if found == 0:
+            # Either a brand-new database or one from before versioning; both match the
+            # current shape, since every table is created above.
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
+        if found != SCHEMA_VERSION:
+            raise SchemaVersionError(
+                f"{self.path} was written by schema version {found}, this build expects "
+                f"{SCHEMA_VERSION}. Move the file aside or migrate it before continuing."
+            )
 
     # ------------------------------------------------------------------ lifecycle
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """All-or-nothing write scope.
+
+        The connection is opened with `isolation_level=None` (autocommit), so every
+        statement would otherwise commit on its own. That is not safe here: a single
+        observation writes a dose, an observation row, and one or more decisions, and a
+        crash between them leaves the history inconsistent in a way that produces a
+        *wrong clinical decision* on replay -- a dose with no observation row replays as
+        a double-dose block against itself.
+
+        Note `with conn:` does NOT open a transaction under autocommit, so BEGIN is
+        explicit. Nesting is a no-op so callers can compose freely.
+        """
+        if self._depth:
+            self._depth += 1
+            try:
+                yield
+            finally:
+                self._depth -= 1
+            return
+
+        self.conn.execute("BEGIN IMMEDIATE")
+        self._depth = 1
+        try:
+            yield
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        else:
+            self.conn.execute("COMMIT")
+        finally:
+            self._depth = 0
 
     def close(self) -> None:
         self.conn.close()
@@ -119,22 +186,45 @@ class CareStore:
             (entry_id, patient_id, med_id, ts.isoformat()),
         )
 
-    def doses_since(self, patient_id: str, med_id: str, since: datetime) -> list[datetime]:
-        """Doses of one medication at or after `since`, oldest first."""
+    def doses_since(
+        self,
+        patient_id: str,
+        med_id: str,
+        since: datetime,
+        exclude_entry_id: str | None = None,
+    ) -> list[datetime]:
+        """Doses of one medication at or after `since`, oldest first.
+
+        `exclude_entry_id` drops the observation currently being evaluated. A dose can
+        never double-dose against itself, and without this a partially-written prior
+        attempt at the same entry would block the retry as "0 minutes ago".
+        """
         rows = self.conn.execute(
             """SELECT ts FROM doses
                WHERE patient_id = ? AND med_id = ? AND ts >= ?
+                 AND (? IS NULL OR entry_id != ?)
                ORDER BY ts""",
-            (patient_id, med_id, since.isoformat()),
+            (patient_id, med_id, since.isoformat(), exclude_entry_id, exclude_entry_id),
         ).fetchall()
         return [datetime.fromisoformat(r["ts"]) for r in rows]
 
-    def dose_count_on(self, patient_id: str, med_id: str, day: date) -> int:
-        """How many doses of one medication were recorded on a calendar day."""
+    def dose_count_on(
+        self,
+        patient_id: str,
+        med_id: str,
+        day: date,
+        exclude_entry_id: str | None = None,
+    ) -> int:
+        """How many doses of one medication were recorded on a calendar day.
+
+        `exclude_entry_id` keeps an entry from counting against itself, mirroring
+        `doses_since`. An observation must never be blocked by its own dose.
+        """
         row = self.conn.execute(
             """SELECT COUNT(*) AS n FROM doses
-               WHERE patient_id = ? AND med_id = ? AND substr(ts, 1, 10) = ?""",
-            (patient_id, med_id, day.isoformat()),
+               WHERE patient_id = ? AND med_id = ? AND substr(ts, 1, 10) = ?
+                 AND (? IS NULL OR entry_id != ?)""",
+            (patient_id, med_id, day.isoformat(), exclude_entry_id, exclude_entry_id),
         ).fetchone()
         return int(row["n"])
 
@@ -160,6 +250,9 @@ class CareStore:
 
     def recent_decisions(self, patient_id: str | None = None, limit: int = 100) -> list[dict]:
         """Newest-first decision history, for the nurse console."""
+        # SQLite treats a negative LIMIT as "no limit", so a caller passing -1 would
+        # dump the entire history. Clamp here as well as at the HTTP boundary.
+        limit = max(1, min(int(limit), MAX_HISTORY_ROWS))
         if patient_id:
             rows = self.conn.execute(
                 """SELECT * FROM decisions WHERE patient_id = ?
@@ -197,5 +290,16 @@ class CareStore:
                WHERE patient_id = ? AND substr(ts, 1, 10) = ?
                GROUP BY med_id ORDER BY med_id""",
             (patient_id, key),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def recent_adherence(self, patient_id: str, limit: int = 10) -> list[dict]:
+        """Dose counts per (day, medication), most recent day first."""
+        limit = max(1, min(int(limit), MAX_HISTORY_ROWS))
+        rows = self.conn.execute(
+            """SELECT substr(ts, 1, 10) AS day, med_id, COUNT(*) AS doses
+               FROM doses WHERE patient_id = ?
+               GROUP BY day, med_id ORDER BY day DESC, med_id LIMIT ?""",
+            (patient_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]

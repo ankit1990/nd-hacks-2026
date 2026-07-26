@@ -45,26 +45,61 @@ class CareReconciler:
             )
 
         now = entry.ts
-        decisions = self.tick(now)
 
         if self.store.has_observation(entry.id):
-            return self._emit(decisions)   # already processed; only time-based checks run
+            return self.tick_and_emit(now)      # replay: only time-based checks run
 
-        if event.kind == "MED_INTAKE":
-            decisions += self._handle_med(entry, event, now)
-        elif event.kind == "BED_EXIT":
-            # Only start the clock on a fresh exit. Sensor feeds repeat "still out of
-            # bed" lines, and restarting the timer on each one would mean a long absence
-            # never crosses the threshold.
-            if self._out_of_bed_since is None:
-                self._out_of_bed_since = now
+        # Order matters, and it is not obvious.
+        #
+        # 1. Medication first, so the dose is on record before the clock advances.
+        #    Otherwise a dose taken at or after its own window close emits a spurious
+        #    MISSED_DOSE ("no dose recorded") alongside the MED_ON_TIME for the very
+        #    dose being recorded, in the same batch.
+        # 2. Clock advance second, so window checks see that dose but the night-absence
+        #    check still sees the pre-event bed state -- a patient returning after a long
+        #    absence should still produce the alert for the absence that just ended.
+        # 3. Bed state last.
+        #
+        # All of it runs in one transaction. A crash partway through would otherwise
+        # leave a dose row with no observation row, and the replay of that same entry
+        # would then find its own dose and block it as a double dose "0 minutes ago" --
+        # telling a patient who took one dose not to take another.
+        with self.store.transaction():
+            event_decisions: list[Decision] = []
+            if event.kind == "MED_INTAKE":
+                event_decisions = self._handle_med(entry, event, now)
+
+            tick_decisions = self.tick(now)
+
+            if event.kind == "BED_EXIT":
+                # Only start the clock on a fresh exit. Sensor feeds repeat "still out
+                # of bed" lines, and restarting the timer on each one would mean a long
+                # absence never crosses the threshold.
+                if self._out_of_bed_since is None:
+                    self._out_of_bed_since = now
+                    self._out_of_bed_alerted = False
+            elif event.kind == "BED_RETURN":
+                self._out_of_bed_since = None
                 self._out_of_bed_alerted = False
-        elif event.kind == "BED_RETURN":
-            self._out_of_bed_since = None
-            self._out_of_bed_alerted = False
 
-        self.store.record_observation(entry, event)
-        return self._emit(decisions)
+            # An observation the extractor could not interpret at all must still reach a
+            # human. Without this it falls through every branch above and vanishes: the
+            # observation row is written, no decision is ever emitted, and nothing shows
+            # on the nurse console. A failed extraction on a night-time bed-exit line
+            # would otherwise lose that alert permanently.
+            if event.needs_review and not event_decisions:
+                event_decisions = [self._decide(
+                    now, entry.id, "NEEDS_HUMAN_REVIEW", event.med_id,
+                    event.summary or f"Uninterpreted observation: {entry.text[:120]}",
+                )]
+
+            self.store.record_observation(entry, event)
+            fresh = self._persist(tick_decisions + event_decisions)
+
+        # Narrative log after the commit: MEMORY.md is for humans and is not
+        # transactional, so it must never describe a rolled-back decision.
+        self._log_memory(fresh)
+        return fresh
 
     def tick(self, now: datetime) -> list[Decision]:
         """Time-driven checks: closed medication windows and prolonged night absence.
@@ -86,11 +121,14 @@ class CareReconciler:
         Used by streaming replay, where a window closing at 08:30 should surface at
         08:30 of virtual time rather than waiting for the next observation.
         """
-        return self._emit(self.tick(now))
+        with self.store.transaction():
+            fresh = self._persist(self.tick(now))
+        self._log_memory(fresh)
+        return fresh
 
     def flush(self, through: datetime) -> list[Decision]:
         """Run the final time-based checks after the last observation."""
-        return self._emit(self.tick(through))
+        return self.tick_and_emit(through)
 
     # ------------------------------------------------------------ medication policy
 
@@ -114,7 +152,9 @@ class CareReconciler:
         # Guard 2: per-medication lockout. Not one global timer -- that would block the
         # evening statin because of the morning beta blocker.
         lockout = timedelta(hours=float(med["lockout_hours"]))
-        recent = self.store.doses_since(self.patient_id, med["id"], now - lockout)
+        recent = self.store.doses_since(
+            self.patient_id, med["id"], now - lockout, exclude_entry_id=entry.id
+        )
         recent = [d for d in recent if d <= now]
         if recent:
             minutes = int((now - max(recent)).total_seconds() // 60)
@@ -126,7 +166,9 @@ class CareReconciler:
             )]
 
         # Guard 3: daily cap.
-        taken_today = self.store.dose_count_on(self.patient_id, med["id"], now.date())
+        taken_today = self.store.dose_count_on(
+            self.patient_id, med["id"], now.date(), exclude_entry_id=entry.id
+        )
         if taken_today >= med["max_daily_doses"]:
             return [self._decide(
                 now, entry.id, "MAX_DAILY_DOSES_BLOCKED", med["id"],
@@ -236,12 +278,9 @@ class CareReconciler:
             speak=speak,
         )
 
-    def _emit(self, decisions: list[Decision]) -> list[Decision]:
-        """Persist decisions, dropping any that were already emitted on a prior run."""
-        fresh = [d for d in decisions if self.store.record_decision(d)]
-        for d in fresh:
-            self._log_memory(d)
-        return fresh
+    def _persist(self, decisions: list[Decision]) -> list[Decision]:
+        """Store decisions, dropping any already emitted on a prior run."""
+        return [d for d in decisions if self.store.record_decision(d)]
 
     @staticmethod
     def _within(now: datetime, start: str, end: str) -> bool:
@@ -257,9 +296,10 @@ class CareReconciler:
             return f"{hours} hour{'s' if hours != 1 else ''}"
         return f"{hours} hour{'s' if hours != 1 else ''} and {mins} minute{'s' if mins != 1 else ''}"
 
-    def _log_memory(self, d: Decision) -> None:
+    def _log_memory(self, decisions: list[Decision]) -> None:
         """Human-readable narrative. SQLite is authoritative; this is for people."""
-        if not self.memory_path:
+        if not self.memory_path or not decisions:
             return
         with open(self.memory_path, "a") as f:
-            f.write(f"- `{d.ts:%Y-%m-%d %H:%M}` **{d.code}** — {d.message}\n")
+            for d in decisions:
+                f.write(f"- `{d.ts:%Y-%m-%d %H:%M}` **{d.code}** — {d.message}\n")

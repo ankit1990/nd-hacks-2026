@@ -15,7 +15,8 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-from careshell.store import CareStore
+from careshell.schemas import Decision
+from careshell.store import MAX_HISTORY_ROWS, CareStore
 
 DB_PATH = os.environ.get("CARESHELL_DB", "workspace/careshell.db")
 TEMPLATE = Path(__file__).parent / "templates" / "index.html"
@@ -57,10 +58,17 @@ async def index() -> str:
 
 
 @app.get("/api/history")
-async def history(patient_id: str | None = None, limit: int = 100) -> dict:
-    """Decision history, so a reconnecting console is not blank."""
+def history(patient_id: str | None = None, limit: int = 100) -> dict:
+    """Decision history, so a reconnecting console is not blank.
+
+    Deliberately a plain `def`: the body is blocking sqlite3 I/O, and Starlette runs
+    sync handlers in a threadpool. As `async def` it would block the event loop and
+    stall WebSocket delivery to every connected console.
+    """
+    # SQLite reads a negative LIMIT as "no limit", so clamp both ends.
+    limit = max(1, min(limit, MAX_HISTORY_ROWS))
     with CareStore(DB_PATH) as store:
-        decisions = store.recent_decisions(patient_id, min(limit, 500))
+        decisions = store.recent_decisions(patient_id, limit)
         # Most recent day with doses, not today: a replayed timeline is historical.
         adherence = store.adherence_summary(patient_id) if patient_id else []
     return {"decisions": decisions, "adherence": adherence}
@@ -79,8 +87,15 @@ async def ws_events(ws: WebSocket) -> None:
 
 
 @app.post("/api/event")
-async def receive_event(event: dict) -> dict:
-    await manager.broadcast(event)
+async def receive_event(event: Decision) -> dict:
+    """Live decision push from the bedside loop.
+
+    Typed as `Decision` rather than a bare dict so a malformed or fabricated payload is
+    rejected with a 422 instead of being rendered on a nurse's screen as though it were
+    a real clinical decision. This endpoint is still unauthenticated and protected only
+    by the OpenShell ingress CIDR -- see "Known gaps" in the README.
+    """
+    await manager.broadcast(event.model_dump(mode="json"))
     return {"status": "ok"}
 
 

@@ -49,8 +49,15 @@ class Extractor(Protocol):
 
 
 def _review_event(summary: str) -> CareEvent:
-    """Fail-safe result: surfaces on the nurse console, never records a dose."""
-    return CareEvent(kind="OTHER", med_id=None, certainty="UNCLEAR", summary=summary)
+    """Fail-safe result: surfaces on the nurse console, never records a dose.
+
+    `needs_review` is what makes the first half of that true. Without it the event is
+    just `kind=OTHER`, which the reconciler has no branch for, so the observation would
+    be stored and then silently produce no decision at all.
+    """
+    return CareEvent(
+        kind="OTHER", med_id=None, certainty="UNCLEAR", summary=summary, needs_review=True
+    )
 
 
 def _strip_fence(text: str) -> str:

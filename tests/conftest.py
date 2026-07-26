@@ -1,51 +1,29 @@
 from __future__ import annotations
 
+import copy
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
+from careshell.care_plan import load_care_plan
 from careshell.reconciler import CareReconciler
 from careshell.schemas import CareEvent, TimelineEntry
 from careshell.store import CareStore
 
-PLAN = {
-    "patient_id": "P104",
-    "display_name": "John Doe",
-    "room": "104",
-    "medications": [
-        {
-            "id": "MED_MORNING",
-            "name": "Beta Blocker",
-            "description": "blue round tablet",
-            "scheduled": "08:00",
-            "window_start": "07:30",
-            "window_end": "08:30",
-            "max_daily_doses": 1,
-            "lockout_hours": 8,
-        },
-        {
-            "id": "MED_EVENING",
-            "name": "Evening Statin",
-            "description": "white round tablet",
-            "scheduled": "20:00",
-            "window_start": "19:30",
-            "window_end": "20:30",
-            "max_daily_doses": 1,
-            "lockout_hours": 8,
-        },
-    ],
-    "behavior": {
-        "night_start": "22:00",
-        "night_end": "06:00",
-        "max_out_of_bed_minutes_at_night": 15,
-    },
-}
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SHIPPED_PLAN_PATH = REPO_ROOT / "workspace" / "care_plan.yaml"
+
+# Load the SHIPPED plan rather than hand-copying it. test_reconciler.py is the file the
+# spec calls "if only one thing works on demo day, make it this" -- if it ran against a
+# hardcoded duplicate, tuning a real window or lockout in care_plan.yaml would leave the
+# safety tests passing against stale parameters.
+PLAN = load_care_plan(SHIPPED_PLAN_PATH)
+PATIENT_ID = PLAN["patient_id"]
 
 
 @pytest.fixture
 def plan() -> dict:
-    import copy
-
     return copy.deepcopy(PLAN)
 
 
@@ -63,7 +41,7 @@ def reconciler(plan, store) -> CareReconciler:
 
 def entry(eid: str, ts: str, text: str = "observation", source: str = "nurse_note") -> TimelineEntry:
     return TimelineEntry(
-        id=eid, ts=datetime.fromisoformat(ts), patient_id="P104", source=source, text=text
+        id=eid, ts=datetime.fromisoformat(ts), patient_id=PATIENT_ID, source=source, text=text
     )
 
 

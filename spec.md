@@ -225,11 +225,36 @@ correctly as text.
   missed-dose alerts for a day the timeline says nothing about. Silence after the last
   observation is missing data, not a missed dose.
 
-### 4.4 Everything downstream fails soft
+### 4.4 Ordering inside `process()`
+
+Three steps, and the order is load-bearing:
+
+1. **Medication first**, so the dose is on record before the clock advances. Otherwise a
+   dose taken at or after its own window close emits a spurious `MISSED_DOSE` ("no dose
+   recorded") in the same batch as the `MED_ON_TIME` for the very dose being recorded.
+2. **Clock advance second**, so window checks see that dose while the night-absence check
+   still sees pre-event bed state — a patient returning after a long absence should still
+   produce the alert for the absence that just ended.
+3. **Bed state last.**
+
+### 4.5 Timestamps are normalised at the schema boundary
+
+`TimelineEntry.ts` converts any offset-bearing timestamp to a naive, facility-local wall
+clock. Medication windows are wall-clock times built with `datetime.combine`, which is
+naive; comparing naive against aware raises `TypeError`. A sensor bridge emitting UTC
+`...Z` is valid ISO 8601 and would otherwise crash the whole run on the second
+observation. Converting rather than rejecting: on a facility appliance the host clock is
+the facility clock.
+
+### 4.6 Everything downstream fails soft
 
 - Extractor: network error, HTTP error, or unparseable JSON → one retry → then a
-  `NEEDS_HUMAN_REVIEW` item. It never raises, never halts the timeline, never silently
-  drops an observation.
+  `CareEvent` with `needs_review=True`, which the reconciler always turns into a
+  `NEEDS_HUMAN_REVIEW` decision. The flag is what makes this real: `kind="OTHER"` alone
+  matches no branch in `process()`, so the observation would be stored and then vanish —
+  and a failed extraction on a night-time bed-exit line would lose that alert
+  permanently. It never raises, never halts the timeline, never silently drops an
+  observation.
 - The model is not trusted to stay inside the medication catalogue: an invented `med_id`
   is dropped and the event downgraded to `UNCLEAR`.
 - TTS: no speech engine (the normal case in a headless sandbox) → stdout.
