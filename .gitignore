@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Generated at runtime. Contains patient history -- never commit.
+workspace/careshell.db
+workspace/careshell.db-wal
+workspace/careshell.db-shm
+workspace/MEMORY.md
+data/live/
+logs/
+.careshell-model

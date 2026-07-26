@@ -1,0 +1,11 @@
+pydantic>=2.6,<3
+PyYAML>=6.0
+requests>=2.31
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Bedside speaker. Needs a system speech engine; alerting.tts_engine degrades to stdout
+# when it is unavailable, which is the normal case in a headless sandbox.
+pyttsx3>=2.90
+
+pytest>=8.0

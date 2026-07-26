@@ -1,0 +1,32 @@
+# CareShell care plan. Machine-read by careshell/care_plan.py.
+#
+# Quote every time value. Unquoted 08:00 is sexagesimal in YAML 1.1 and parses as the
+# integer 480. The loader coerces it back, but quoting means you never have to know that.
+
+patient_id: P104
+display_name: John Doe
+room: "104"
+
+medications:
+  - id: MED_MORNING
+    name: Beta Blocker
+    description: blue round tablet, blue bottle on the nightstand
+    scheduled: "08:00"
+    window_start: "07:30"
+    window_end: "08:30"
+    max_daily_doses: 1
+    lockout_hours: 8          # per medication, not one global timer
+
+  - id: MED_EVENING
+    name: Evening Statin
+    description: white round tablet, white bottle
+    scheduled: "20:00"
+    window_start: "19:30"
+    window_end: "20:30"
+    max_daily_doses: 1
+    lockout_hours: 8
+
+behavior:
+  night_start: "22:00"
+  night_end: "06:00"
+  max_out_of_bed_minutes_at_night: 15

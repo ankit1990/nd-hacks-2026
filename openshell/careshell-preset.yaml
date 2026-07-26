@@ -1,0 +1,58 @@
+# CareShell OpenShell preset -- a POLICY DELTA, layered on NemoClaw's baseline.
+#
+# Apply with:
+#     nemoclaw careshell policy-add --from-file openshell/careshell-preset.yaml
+#
+# Do NOT apply with `openshell policy set`. That REPLACES the baseline policy and strips
+# routes the agent needs: inference.local (the attached vLLM), the gateway dial-back
+# WebSocket, and writable /dev/pts (which breaks the exec tool). The failure is silent
+# until the agent tries to use them.
+#
+# Verify after applying with `nemoclaw careshell policy-show` -- inference.local and the
+# gateway WebSocket must still be listed.
+
+name: careshell
+
+filesystem:
+  mounts:
+    # Source timelines. Read-only: CareShell never edits its own input.
+    - host: ./data/patients
+      container: /app/data/patients
+      mode: ro
+
+    # Live feed directory. Writable so tools/feed_timeline.py can append from the host
+    # while CareShell tails from inside the sandbox.
+    - host: ./data/live
+      container: /app/data/live
+      mode: rw
+
+    # Care plan, SQLite history database, MEMORY.md narrative.
+    - host: ./workspace
+      container: /app/workspace
+      mode: rw
+
+    - host: ./logs
+      container: /app/logs
+      mode: rw
+
+network:
+  ingress:
+    # Nurse station console. LAN only -- adjust the CIDR to your facility subnet.
+    - port: 8000
+      protocol: tcp
+      cidr: 192.168.1.0/24
+
+  # No egress entries are added. Denial is by omission from the allowlist: OpenShell
+  # routes outbound traffic through a userspace HTTP CONNECT proxy evaluated by OPA,
+  # and anything not explicitly allowed is refused with a 403 at the proxy.
+  #
+  # This is NOT a kernel packet filter. The kernel-enforced parts of the sandbox are
+  # Landlock (filesystem) and seccomp (syscalls). Say it that way in the demo -- the
+  # denial you will show on screen is:
+  #     curl: (56) Received HTTP code 403 from proxy after CONNECT
+  # The baseline policy already permits inference.local; do not re-declare it here.
+
+runtime:
+  gpu:
+    enabled: true
+    devices: ["0"]        # GB10

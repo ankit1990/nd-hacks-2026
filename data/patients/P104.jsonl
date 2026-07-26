@@ -1,0 +1,17 @@
+{"id":"e001","ts":"2026-03-14T06:58:12","patient_id":"P104","source":"sensor","text":"Bed exit detected."}
+{"id":"e002","ts":"2026-03-14T07:04:40","patient_id":"P104","source":"sensor","text":"Patient returned to bed."}
+{"id":"e003","ts":"2026-03-14T07:41:03","patient_id":"P104","source":"sensor","text":"Bed exit detected. Movement toward the nightstand."}
+{"id":"e004","ts":"2026-03-14T07:44:18","patient_id":"P104","source":"nurse_note","text":"John reached for the blue bottle on the nightstand, then set it back down."}
+{"id":"e005","ts":"2026-03-14T07:58:22","patient_id":"P104","source":"nurse_note","text":"John opened the blue bottle and swallowed one beta blocker tablet with a glass of water."}
+{"id":"e006","ts":"2026-03-14T08:29:55","patient_id":"P104","source":"nurse_note","text":"John asked whether he had taken his morning pill yet."}
+{"id":"e007","ts":"2026-03-14T08:31:10","patient_id":"P104","source":"nurse_note","text":"John swallowed a second beta blocker tablet from the blue bottle."}
+{"id":"e008","ts":"2026-03-14T09:15:00","patient_id":"P104","source":"sensor","text":"Patient seated in the armchair watching television."}
+{"id":"e009","ts":"2026-03-14T13:20:44","patient_id":"P104","source":"device","text":"Blood pressure cuff reading recorded: 128 over 76."}
+{"id":"e010","ts":"2026-03-14T19:52:31","patient_id":"P104","source":"nurse_note","text":"Evening round. John swallowed the white statin tablet with water."}
+{"id":"e011","ts":"2026-03-14T21:40:09","patient_id":"P104","source":"sensor","text":"Patient returned to bed. Lying still."}
+{"id":"e012","ts":"2026-03-14T23:38:55","patient_id":"P104","source":"sensor","text":"Restless in bed, tossing and turning repeatedly."}
+{"id":"e013","ts":"2026-03-15T02:14:07","patient_id":"P104","source":"sensor","text":"Bed exit detected."}
+{"id":"e014","ts":"2026-03-15T02:41:52","patient_id":"P104","source":"sensor","text":"Out of bed. No return detected since the last bed exit."}
+{"id":"e015","ts":"2026-03-15T02:58:30","patient_id":"P104","source":"sensor","text":"Patient returned to bed."}
+{"id":"e016","ts":"2026-03-15T09:12:00","patient_id":"P104","source":"nurse_note","text":"Morning round. John slept through breakfast and no medication was administered."}
+{"id":"e017","ts":"2026-03-15T20:05:00","patient_id":"P104","source":"nurse_note","text":"Evening round. John swallowed the white statin tablet with water."}
