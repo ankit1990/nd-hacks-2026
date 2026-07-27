@@ -11,7 +11,7 @@ at 3pm must still evaluate an 08:00 medication window as 08:00.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 
 from careshell.care_plan import parse_hhmm
 from careshell.schemas import CareEvent, Decision, TimelineEntry
@@ -219,7 +219,21 @@ class CareReconciler:
                 close = datetime.combine(day, parse_hhmm(med["window_end"]))
                 if not (since < close <= now):
                     continue
-                if self.store.dose_count_on(self.patient_id, med["id"], day) > 0:
+                # A window counts as covered only by a dose taken at or BEFORE it
+                # closed -- not by any dose on the same calendar day.
+                #
+                # Same-day was wrong twice over. It let a dose recorded 14 hours late
+                # retroactively erase the missed-dose alert for a window that really did
+                # close empty, and it made batch and stream disagree: stream evaluates a
+                # tick at the close instant (no dose yet -> fires), batch reached the
+                # window only when the late dose arrived (dose present -> silent).
+                covered = [
+                    d for d in self.store.doses_since(
+                        self.patient_id, med["id"], datetime.combine(day, dtime.min)
+                    )
+                    if d <= close
+                ]
+                if covered:
                     continue
                 out.append(self._decide(
                     close,

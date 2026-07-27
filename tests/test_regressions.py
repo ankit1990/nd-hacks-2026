@@ -79,11 +79,54 @@ def test_dose_at_window_close_emits_no_missed_dose(reconciler, store):
     assert store.dose_count_on("P104", "MED_MORNING", date(2026, 3, 14)) == 1
 
 
-def test_late_dose_emits_out_of_window_not_missed(reconciler):
+def test_late_dose_reports_both_the_empty_window_and_the_late_intake(reconciler):
+    """A dose after the window closed does not retroactively fill that window.
+
+    Both statements are true and separately timestamped: the 08:30 window closed with
+    nothing in it, and a dose was taken late at 09:00.
+    """
     reconciler.process(entry("e1", "2026-03-14T07:00:00"), bed("BED_EXIT"))
     out = reconciler.process(entry("e2", "2026-03-14T09:00:00"), intake())
     assert "MED_OUT_OF_WINDOW" in codes(out)
-    assert "MISSED_DOSE" not in codes(out), "contradicts the dose recorded in the same call"
+    missed = [d for d in out if d.code == "MISSED_DOSE" and d.med_id == "MED_MORNING"]
+    assert len(missed) == 1
+    assert missed[0].ts == datetime(2026, 3, 14, 8, 30)   # stamped at the close, not 09:00
+
+
+def test_very_late_dose_does_not_erase_the_missed_window(plan, store):
+    """A dose 14 hours late used to silently suppress the missed-dose alert."""
+    plan["medications"] = [plan["medications"][0]]        # MED_MORNING only
+    r = CareReconciler(plan, store, memory_path=None)
+    r.process(entry("e1", "2026-03-14T07:00:00"), bed("BED_EXIT"))
+    out = r.process(entry("e2", "2026-03-14T23:00:00"), intake())
+    assert "MISSED_DOSE" in codes(out)
+    assert "MED_OUT_OF_WINDOW" in codes(out)
+
+
+def test_batch_and_stream_agree_on_a_late_dose(plan, tmp_path):
+    """Stream ticks at the window close; batch reaches it later. They must not diverge."""
+    from careshell.stream import build_checkpoints
+
+    plan["medications"] = [plan["medications"][0]]
+    entries = [entry("e1", "2026-03-14T07:00:00"), entry("e2", "2026-03-14T23:00:00")]
+    events = {"e1": bed("BED_EXIT"), "e2": intake()}
+
+    with CareStore(tmp_path / "batch.db") as store:
+        r = CareReconciler(plan, store, memory_path=None)
+        batch = []
+        for e in entries:
+            batch += [(d.code, d.ts) for d in r.process(e, events[e.id])]
+
+    with CareStore(tmp_path / "stream.db") as store:
+        r = CareReconciler(plan, store, memory_path=None)
+        streamed = []
+        for cp in build_checkpoints(entries, plan):
+            if cp.is_event:
+                streamed += [(d.code, d.ts) for d in r.process(cp.entry, events[cp.entry.id])]
+            else:
+                streamed += [(d.code, d.ts) for d in r.tick_and_emit(cp.ts)]
+
+    assert sorted(batch) == sorted(streamed)
 
 
 def test_missed_dose_still_fires_when_no_dose_arrives(reconciler):
