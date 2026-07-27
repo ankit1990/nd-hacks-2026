@@ -5,116 +5,386 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CareShell — Nurse Console</title>
   <style>
+    /* Clinical light theme. Ward displays sit under bright light and get read at a
+       glance from a few feet away, so: high contrast, dense but not cramped, and
+       severity carried by a coloured rail + chip rather than by row background alone
+       (background-only coding disappears for the ~8% of men with CVD). */
     :root {
-      --bg: #0f1216; --panel: #171b21; --line: #262c35;
-      --text: #e6e9ee; --muted: #8b95a3;
-      --ok: #3fa66a; --warn: #d98324; --alert: #d2413a; --review: #4a7fd0;
+      --bg:#eef1f5; --panel:#ffffff; --line:#d6dce5; --line-soft:#e8edf3;
+      --ink:#16202e; --ink-2:#4a5a6e; --ink-3:#7b8a9e;
+      --brand:#1f5f8b;
+      --ok:#1a7f4b;      --ok-bg:#e6f4ec;
+      --warn:#a35a00;    --warn-bg:#fdf0dd;
+      --crit:#b3251c;    --crit-bg:#fdeceb;
+      --info:#245ea8;    --info-bg:#e8f0fb;
+      --radius:6px;
+      --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
     }
-    * { box-sizing: border-box; }
+    * { box-sizing:border-box; }
+    html,body { height:100%; }
     body {
-      margin: 0; background: var(--bg); color: var(--text);
-      font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+      margin:0; background:var(--bg); color:var(--ink);
+      font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      -webkit-font-smoothing:antialiased;
     }
-    header {
-      padding: 18px 24px; border-bottom: 1px solid var(--line);
-      display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+
+    /* ---- top bar ---------------------------------------------------------- */
+    .topbar {
+      background:var(--brand); color:#fff; padding:0 20px; height:44px;
+      display:flex; align-items:center; gap:14px;
     }
-    h1 { font-size: 17px; margin: 0; letter-spacing: .01em; }
-    .status { font-size: 13px; color: var(--muted); }
-    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-           background: var(--muted); margin-right: 6px; vertical-align: middle; }
-    .dot.live { background: var(--ok); }
-    main { padding: 20px 24px; max-width: 1100px; }
-    table { width: 100%; border-collapse: collapse; }
-    th {
-      text-align: left; font-size: 11px; text-transform: uppercase;
-      letter-spacing: .08em; color: var(--muted); font-weight: 600;
-      padding: 8px 12px; border-bottom: 1px solid var(--line);
+    .logo { font-weight:700; letter-spacing:.02em; font-size:14px; }
+    .logo span { font-weight:400; opacity:.75; }
+    .topbar .spacer { flex:1; }
+    .conn { display:flex; align-items:center; gap:7px; font-size:12px; opacity:.95; }
+    .dot { width:8px; height:8px; border-radius:50%; background:#8fa8bd; }
+    .dot.live { background:#5fd394; box-shadow:0 0 0 0 rgba(95,211,148,.7); animation:beat 2.4s infinite; }
+    @keyframes beat { 0%{box-shadow:0 0 0 0 rgba(95,211,148,.6)} 70%{box-shadow:0 0 0 7px rgba(95,211,148,0)} 100%{box-shadow:0 0 0 0 rgba(95,211,148,0)} }
+    .clock { font-family:var(--mono); font-size:12px; opacity:.9; }
+
+    /* ---- patient banner --------------------------------------------------- */
+    .banner {
+      background:var(--panel); border-bottom:1px solid var(--line);
+      padding:12px 20px; display:flex; align-items:center; gap:24px; flex-wrap:wrap;
     }
-    td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    tr:last-child td { border-bottom: none; }
-    .time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .code {
-      display: inline-block; padding: 2px 8px; border-radius: 4px;
-      font-size: 11px; font-weight: 600; letter-spacing: .04em; white-space: nowrap;
+    .who { display:flex; align-items:center; gap:12px; }
+    .avatar {
+      width:38px; height:38px; border-radius:50%; background:var(--info-bg);
+      color:var(--info); display:grid; place-items:center; font-weight:700; font-size:14px;
     }
-    .MED_ON_TIME { background: rgba(63,166,106,.15); color: var(--ok); }
-    .MED_OUT_OF_WINDOW, .MISSED_DOSE { background: rgba(217,131,36,.15); color: var(--warn); }
-    .DOUBLE_DOSE_BLOCKED, .MAX_DAILY_DOSES_BLOCKED, .NIGHT_OUT_OF_BED {
-      background: rgba(210,65,58,.15); color: var(--alert);
+    .who h1 { margin:0; font-size:17px; font-weight:650; letter-spacing:-.01em; }
+    .who .sub { color:var(--ink-3); font-size:12px; margin-top:1px; }
+    .who .sub b { color:var(--ink-2); font-weight:600; font-family:var(--mono); }
+    .rule { width:1px; align-self:stretch; background:var(--line); }
+
+    .meds { display:flex; gap:18px; flex-wrap:wrap; }
+    .med { min-width:132px; }
+    .med .n { font-size:12px; font-weight:600; color:var(--ink-2); }
+    .med .t { font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:2px; }
+    .pill { display:inline-block; margin-top:4px; padding:1px 7px; border-radius:10px;
+            font-size:11px; font-weight:600; }
+    .pill.given { background:var(--ok-bg); color:var(--ok); }
+    .pill.due   { background:var(--warn-bg); color:var(--warn); }
+
+    /* ---- KPI tiles -------------------------------------------------------- */
+    .kpis { display:flex; gap:10px; padding:14px 20px 0; flex-wrap:wrap; }
+    .kpi {
+      background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+      padding:10px 14px; min-width:118px; position:relative; overflow:hidden;
     }
-    .NEEDS_HUMAN_REVIEW { background: rgba(74,127,208,.15); color: var(--review); }
-    .empty { color: var(--muted); padding: 40px 12px; text-align: center; }
-    tr.fresh { animation: flash 1.2s ease-out; }
-    @keyframes flash { from { background: rgba(74,127,208,.14); } to { background: transparent; } }
+    .kpi .v { font-size:23px; font-weight:680; line-height:1.1; font-variant-numeric:tabular-nums; }
+    .kpi .k { font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+              color:var(--ink-3); font-weight:600; margin-top:3px; }
+    .kpi.crit .v { color:var(--crit); }
+    .kpi.warn .v { color:var(--warn); }
+    .kpi.ok   .v { color:var(--ok); }
+    .kpi.info .v { color:var(--info); }
+    .kpi.bump { animation:bump .55s ease-out; }
+    @keyframes bump { 0%{transform:scale(1)} 35%{transform:scale(1.06)} 100%{transform:scale(1)} }
+
+    /* ---- feed ------------------------------------------------------------- */
+    .wrap { padding:14px 20px 28px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); }
+    .card-hd {
+      padding:10px 14px; border-bottom:1px solid var(--line);
+      display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    }
+    .card-hd h2 { margin:0; font-size:13px; font-weight:650; letter-spacing:.01em; }
+    .card-hd .count { color:var(--ink-3); font-size:12px; }
+    .filters { margin-left:auto; display:flex; gap:5px; }
+    .filters button {
+      font:inherit; font-size:11.5px; font-weight:600; padding:3px 10px; cursor:pointer;
+      border:1px solid var(--line); background:#fff; color:var(--ink-2); border-radius:20px;
+    }
+    .filters button:hover { background:var(--bg); }
+    .filters button[aria-pressed="true"] { background:var(--brand); border-color:var(--brand); color:#fff; }
+
+    .scroll { max-height:calc(100vh - 300px); overflow-y:auto; overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; min-width:760px; }
+    thead th {
+      position:sticky; top:0; z-index:2; background:#f6f8fb;
+      text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-3); font-weight:700; padding:8px 12px; border-bottom:1px solid var(--line);
+    }
+    tbody td { padding:9px 12px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr:hover { background:#f9fbfd; }
+
+    /* severity rail on the first cell */
+    td.when { white-space:nowrap; font-family:var(--mono); font-size:12px; color:var(--ink-2);
+              border-left:3px solid transparent; padding-left:11px; }
+    tr.sev-crit td.when { border-left-color:var(--crit); }
+    tr.sev-warn td.when { border-left-color:var(--warn); }
+    tr.sev-ok   td.when { border-left-color:var(--ok); }
+    tr.sev-info td.when { border-left-color:var(--info); }
+    td.when .d { color:var(--ink-3); font-size:11px; }
+
+    .chip { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10.5px;
+            font-weight:700; letter-spacing:.03em; white-space:nowrap; }
+    .chip.crit { background:var(--crit-bg); color:var(--crit); }
+    .chip.warn { background:var(--warn-bg); color:var(--warn); }
+    .chip.ok   { background:var(--ok-bg);   color:var(--ok); }
+    .chip.info { background:var(--info-bg); color:var(--info); }
+    td.med { font-family:var(--mono); font-size:11.5px; color:var(--ink-2); white-space:nowrap; }
+    td.msg { color:var(--ink); }
+    td.act { text-align:right; white-space:nowrap; }
+    .ack {
+      font:inherit; font-size:11px; font-weight:600; padding:2px 9px; cursor:pointer;
+      border:1px solid var(--line); background:#fff; color:var(--ink-2); border-radius:4px;
+    }
+    .ack:hover { background:var(--bg); }
+    tr.acked { opacity:.5; }
+    tr.acked .ack { visibility:hidden; }
+
+    /* new-row entrance: slide down, flash, settle. Critical rows flash red. */
+    tr.enter { animation:enter .45s cubic-bezier(.2,.8,.3,1); }
+    @keyframes enter {
+      from { opacity:0; transform:translateY(-9px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    tr.flash td { animation:flash 2.6s ease-out forwards; }
+    tr.flash.sev-crit td { animation-name:flashCrit; }
+    @keyframes flash     { 0%,22%{background:#dfeafb} 100%{background:transparent} }
+    @keyframes flashCrit { 0%,22%{background:#fbdedb} 100%{background:transparent} }
+    tr.enter td.when::after {
+      content:"NEW"; margin-left:8px; font-size:9px; font-weight:800; letter-spacing:.08em;
+      color:var(--info); background:var(--info-bg); padding:1px 5px; border-radius:3px;
+      animation:fadeNew 6s forwards;
+    }
+    @keyframes fadeNew { 0%,70%{opacity:1} 100%{opacity:0} }
+
+    .empty { padding:44px 12px; text-align:center; color:var(--ink-3); }
+    .hidden { display:none !important; }
+
+    /* critical banner that drops in when a blocking alert fires */
+    .toast {
+      position:fixed; right:18px; bottom:18px; z-index:50; max-width:390px;
+      background:var(--panel); border:1px solid var(--crit); border-left:5px solid var(--crit);
+      border-radius:var(--radius); box-shadow:0 8px 28px rgba(16,32,52,.18);
+      padding:11px 14px; display:flex; gap:11px; animation:enter .3s ease-out;
+    }
+    .toast .ic { color:var(--crit); font-size:17px; line-height:1.1; }
+    .toast .tt { font-weight:700; font-size:12px; color:var(--crit); letter-spacing:.02em; }
+    .toast .tm { font-size:12.5px; margin-top:2px; color:var(--ink-2); }
+    @media (max-width:720px) { .rule,.meds { display:none; } }
   </style>
 </head>
 <body>
-  <header>
-    <h1>CareShell — Nurse Console</h1>
-    <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
-    <span class="status" id="count"></span>
-  </header>
-  <main>
-    <table>
-      <thead>
-        <tr><th style="width:130px">Time</th><th style="width:200px">Event</th>
-            <th style="width:120px">Medication</th><th>Detail</th></tr>
-      </thead>
-      <tbody id="rows">
-        <tr><td colspan="4" class="empty">Waiting for events…</td></tr>
-      </tbody>
-    </table>
-  </main>
+  <div class="topbar">
+    <div class="logo">CareShell <span>· Nurse Console</span></div>
+    <div class="spacer"></div>
+    <div class="conn"><span class="dot" id="dot"></span><span id="connTxt">connecting…</span></div>
+    <div class="clock" id="clock"></div>
+  </div>
+
+  <div class="banner">
+    <div class="who">
+      <div class="avatar" id="initials">–</div>
+      <div>
+        <h1 id="pname">Loading…</h1>
+        <div class="sub">Room <b id="proom">–</b> · ID <b id="pid">–</b> · Care plan active</div>
+      </div>
+    </div>
+    <div class="rule"></div>
+    <div class="meds" id="meds"></div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi ok"   id="k-doses"><div class="v">0</div><div class="k">Doses recorded</div></div>
+    <div class="kpi crit" id="k-block"><div class="v">0</div><div class="k">Doses blocked</div></div>
+    <div class="kpi warn" id="k-miss"><div class="v">0</div><div class="k">Missed doses</div></div>
+    <div class="kpi info" id="k-rev"><div class="v">0</div><div class="k">Needs review</div></div>
+    <div class="kpi"      id="k-night"><div class="v">0</div><div class="k">Night episodes</div></div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="card-hd">
+        <h2>Care event feed</h2>
+        <span class="count" id="shown"></span>
+        <div class="filters">
+          <button data-f="all" aria-pressed="true">All</button>
+          <button data-f="alerts" aria-pressed="false">Alerts only</button>
+          <button data-f="meds" aria-pressed="false">Medication</button>
+        </div>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:126px">Time</th>
+              <th style="width:186px">Event</th>
+              <th style="width:118px">Medication</th>
+              <th>Detail</th>
+              <th style="width:74px"></th>
+            </tr>
+          </thead>
+          <tbody id="rows">
+            <tr><td colspan="5" class="empty">Waiting for events…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
 <script>
-const rows = document.getElementById('rows');
-const dot = document.getElementById('dot');
-const conn = document.getElementById('conn');
-const count = document.getElementById('count');
-let total = 0;
-
-const fmt = ts => {
-  const d = new Date(ts);
-  return isNaN(d) ? ts : d.toLocaleString([], {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-  });
+const SEV = {
+  MED_ON_TIME:             {c:'ok',   label:'ON TIME'},
+  MED_OUT_OF_WINDOW:       {c:'warn', label:'OUT OF WINDOW'},
+  DOUBLE_DOSE_BLOCKED:     {c:'crit', label:'DOUBLE DOSE BLOCKED'},
+  MAX_DAILY_DOSES_BLOCKED: {c:'crit', label:'DAILY LIMIT BLOCKED'},
+  MISSED_DOSE:             {c:'warn', label:'MISSED DOSE'},
+  NIGHT_OUT_OF_BED:        {c:'crit', label:'NIGHT WANDERING'},
+  NEEDS_HUMAN_REVIEW:      {c:'info', label:'NEEDS REVIEW'},
 };
+const MED_CODES = new Set(['MED_ON_TIME','MED_OUT_OF_WINDOW','DOUBLE_DOSE_BLOCKED',
+                           'MAX_DAILY_DOSES_BLOCKED','MISSED_DOSE']);
+const ALERT_CODES = new Set(['DOUBLE_DOSE_BLOCKED','MAX_DAILY_DOSES_BLOCKED','MISSED_DOSE',
+                             'NIGHT_OUT_OF_BED','NEEDS_HUMAN_REVIEW','MED_OUT_OF_WINDOW']);
 
-function addRow(d, fresh) {
-  if (rows.querySelector('.empty')) rows.innerHTML = '';
-  const tr = document.createElement('tr');
-  if (fresh) tr.className = 'fresh';
-  const cell = (html, cls) => {
-    const td = document.createElement('td');
-    if (cls) td.className = cls;
-    td.innerHTML = html;
-    return td;
+const $ = id => document.getElementById(id);
+const rowsEl = $('rows');
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let filter = 'all';
+let total = 0;
+const counts = {doses:0, blocked:0, missed:0, review:0, night:0};
+
+function fmt(ts) {
+  const d = new Date(ts);
+  if (isNaN(d)) return {t: String(ts), d: ''};
+  return {
+    t: d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false}),
+    d: d.toLocaleDateString([], {day:'2-digit', month:'short'}),
   };
-  const esc = s => String(s ?? '').replace(/[&<>"]/g,
-    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  tr.append(
-    cell(esc(fmt(d.ts)), 'time'),
-    cell(`<span class="code ${esc(d.code)}">${esc(d.code)}</span>`),
-    cell(esc(d.med_id || '—'), 'time'),
-    cell(esc(d.message))
-  );
-  rows.prepend(tr);
-  total++;
-  count.textContent = `${total} event${total === 1 ? '' : 's'}`;
 }
 
-fetch('/api/history?limit=100')
-  .then(r => r.json())
-  .then(data => data.decisions.slice().reverse().forEach(d => addRow(d, false)))
-  .catch(() => {});
+function bump(el, key, delta) {
+  counts[key] += delta;
+  const v = el.querySelector('.v');
+  v.textContent = counts[key];
+  el.classList.remove('bump');
+  void el.offsetWidth;              // restart the animation
+  el.classList.add('bump');
+}
+
+function tally(code, live) {
+  if (code === 'MED_ON_TIME')                                    bump($('k-doses'), 'doses', 1);
+  else if (code === 'DOUBLE_DOSE_BLOCKED' || code === 'MAX_DAILY_DOSES_BLOCKED')
+                                                                 bump($('k-block'), 'blocked', 1);
+  else if (code === 'MISSED_DOSE')                               bump($('k-miss'), 'missed', 1);
+  else if (code === 'NEEDS_HUMAN_REVIEW')                        bump($('k-rev'), 'review', 1);
+  else if (code === 'NIGHT_OUT_OF_BED')                          bump($('k-night'), 'night', 1);
+}
+
+function resetView() {
+  rowsEl.innerHTML = '<tr><td colspan="5" class="empty">Waiting for events…</td></tr>';
+  total = 0;
+  $('shown').textContent = '';
+  Object.keys(counts).forEach(k => counts[k] = 0);
+  ['k-doses','k-block','k-miss','k-rev','k-night']
+    .forEach(id => $(id).querySelector('.v').textContent = '0');
+}
+
+function matches(code) {
+  if (filter === 'alerts') return ALERT_CODES.has(code);
+  if (filter === 'meds')   return MED_CODES.has(code);
+  return true;
+}
+
+function addRow(d, live) {
+  const empty = rowsEl.querySelector('.empty');
+  if (empty) rowsEl.innerHTML = '';
+
+  const sev = SEV[d.code] || {c:'info', label:d.code};
+  const when = fmt(d.ts);
+  const tr = document.createElement('tr');
+  tr.className = `sev-${sev.c}` + (live ? ' enter flash' : '');
+  tr.dataset.code = d.code;
+  tr.innerHTML =
+    `<td class="when">${esc(when.t)} <span class="d">${esc(when.d)}</span></td>` +
+    `<td><span class="chip ${sev.c}">${esc(sev.label)}</span></td>` +
+    `<td class="med">${esc(d.med_id || '—')}</td>` +
+    `<td class="msg">${esc(d.message)}</td>` +
+    `<td class="act">${ALERT_CODES.has(d.code) ? '<button class="ack">Ack</button>' : ''}</td>`;
+
+  const ack = tr.querySelector('.ack');
+  if (ack) ack.addEventListener('click', () => tr.classList.add('acked'));
+
+  if (!matches(d.code)) tr.classList.add('hidden');
+  rowsEl.prepend(tr);
+
+  total++;
+  $('shown').textContent = `${total} event${total === 1 ? '' : 's'}`;
+  tally(d.code, live);
+
+  if (live) {
+    tr.scrollIntoView({block:'nearest', behavior:'smooth'});
+    if (sev.c === 'crit') toast(sev.label, d.message);
+    setTimeout(() => tr.classList.remove('enter'), 6200);
+  }
+}
+
+let toastTimer;
+function toast(title, msg) {
+  document.querySelector('.toast')?.remove();
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `<div class="ic">&#9888;</div><div><div class="tt">${esc(title)}</div>` +
+                 `<div class="tm">${esc(msg)}</div></div>`;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 7000);
+}
+
+document.querySelectorAll('.filters button').forEach(b => {
+  b.addEventListener('click', () => {
+    filter = b.dataset.f;
+    document.querySelectorAll('.filters button')
+      .forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    rowsEl.querySelectorAll('tr').forEach(tr => {
+      if (!tr.dataset.code) return;
+      tr.classList.toggle('hidden', !matches(tr.dataset.code));
+    });
+  });
+});
+
+function tick() {
+  $('clock').textContent = new Date().toLocaleTimeString([], {hour12:false});
+}
+tick(); setInterval(tick, 1000);
+
+fetch('/api/overview?limit=200').then(r => r.json()).then(o => {
+  const p = o.patient || {};
+  $('pname').textContent = p.name || 'Unknown';
+  $('proom').textContent = p.room || '—';
+  $('pid').textContent = p.id || '—';
+  $('initials').textContent = (p.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0,2);
+
+  $('meds').innerHTML = (o.medications || []).map(m => {
+    const given = m.doses >= m.max_daily_doses;
+    return `<div class="med">
+      <div class="n">${esc(m.name)}</div>
+      <div class="t">${esc(m.scheduled)} · window ${esc(m.window)}</div>
+      <span class="pill ${given ? 'given' : 'due'}">${given ? 'given' : 'due'} ${m.doses}/${m.max_daily_doses}</span>
+    </div>`;
+  }).join('');
+
+  (o.decisions || []).slice().reverse().forEach(d => addRow(d, false));
+  if (!total) rowsEl.innerHTML = '<tr><td colspan="5" class="empty">No events recorded yet.</td></tr>';
+}).catch(() => {});
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws/events`);
-  ws.onopen = () => { dot.className = 'dot live'; conn.textContent = 'live'; };
-  ws.onmessage = e => { try { addRow(JSON.parse(e.data), true); } catch (_) {} };
+  ws.onopen  = () => { $('dot').className = 'dot live'; $('connTxt').textContent = 'live'; };
+  ws.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+    if (d.type === 'reset') { resetView(); return; }   // new demo run starting
+    addRow(d, true);
+  };
   ws.onclose = () => {
-    dot.className = 'dot'; conn.textContent = 'reconnecting…';
+    $('dot').className = 'dot'; $('connTxt').textContent = 'reconnecting…';
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();

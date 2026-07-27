@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
+import time
 from typing import Protocol
 
 import requests
@@ -37,6 +39,12 @@ DEFAULT_MODEL = os.environ.get("CARESHELL_MODEL", "nvidia/Nemotron-Nano-12B-v2")
 # Enough for one CareEvent object. Reasoning models spend hidden tokens against this
 # budget before emitting content, so it cannot be as tight as the JSON alone implies.
 MAX_OUTPUT_TOKENS = int(os.environ.get("CARESHELL_MAX_TOKENS", "512"))
+
+# Retrying a 503 or a 429 instantly just collects a second 503. A gateway fronting a
+# shared upstream will rate-limit a burst -- feeding 17 timeline entries through in
+# 34 seconds is exactly such a burst -- and it needs a moment, not a faster retry.
+RETRY_BACKOFF_SECONDS = (0.75, 2.0, 4.0)
+RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 SYSTEM_PROMPT = """You classify a single eldercare observation into one JSON object.
 
@@ -90,12 +98,14 @@ class LLMExtractor:
         endpoint: str = DEFAULT_ENDPOINT,
         model: str = DEFAULT_MODEL,
         timeout: int = 30,
-        attempts: int = 2,
+        attempts: int = 3,
+        sleeper=time.sleep,
     ):
         self.endpoint = endpoint
         self.model = model
         self.timeout = timeout
         self.attempts = max(1, attempts)
+        self.sleeper = sleeper
         self.session = requests.Session()
         # Negotiated on first use; see _swap_token_param.
         self._token_param = os.environ.get("CARESHELL_TOKEN_PARAM", "max_tokens")
@@ -156,6 +166,15 @@ class LLMExtractor:
         self._token_param = alternative
         return True
 
+    def _backoff(self, tried: int, attempts_left: int) -> None:
+        """Pause before the next attempt. No-op once the budget is spent."""
+        if attempts_left <= 0:
+            return
+        base = RETRY_BACKOFF_SECONDS[min(tried, len(RETRY_BACKOFF_SECONDS) - 1)]
+        # Jitter, so a burst of entries failing together does not resynchronise into a
+        # second burst against an already-strained gateway.
+        self.sleeper(base * (0.7 + random.random() * 0.6))
+
     def extract(self, entry: TimelineEntry, med_catalog: list[dict]) -> CareEvent:
         valid_ids = {m["id"] for m in med_catalog}
         last_err: Exception | None = None
@@ -167,12 +186,14 @@ class LLMExtractor:
 
         while attempts_left > 0:
             payload = self._payload(entry, med_catalog)
+            tried = self.attempts - attempts_left
 
             try:
                 r = self.session.post(self.endpoint, json=payload, timeout=self.timeout)
             except Exception as exc:          # noqa: BLE001 - transport failure
                 last_err = exc
                 attempts_left -= 1
+                self._backoff(tried, attempts_left)
                 continue
 
             if swaps_left and self._swap_token_param(r):
@@ -186,6 +207,8 @@ class LLMExtractor:
                 event = CareEvent(**json.loads(_strip_fence(content)))
             except Exception as exc:          # noqa: BLE001 - any failure degrades the same way
                 last_err = exc
+                if r.status_code in RETRYABLE_STATUS:
+                    self._backoff(tried, attempts_left)
                 continue
 
             # The model is not trusted to stay inside the catalogue.

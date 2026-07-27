@@ -36,14 +36,18 @@ class FakeSession:
 
     def post(self, url, json=None, timeout=None):
         self.calls += 1
-        item = self.responses.pop(0) if self.responses else self.responses
+        # Repeat the last scripted response once the list is exhausted, so a test
+        # written for N attempts still behaves sanely if the retry budget grows.
+        item = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
         if isinstance(item, Exception):
             raise item
         return item
 
 
-def make(*responses) -> tuple[LLMExtractor, FakeSession]:
-    ex = LLMExtractor(endpoint="http://stub/v1/chat/completions", model="stub")
+def make(*responses, attempts: int = 2) -> tuple[LLMExtractor, FakeSession]:
+    # sleeper is a no-op: these tests exercise retry accounting, not wall-clock backoff.
+    ex = LLMExtractor(endpoint="http://stub/v1/chat/completions", model="stub",
+                      attempts=attempts, sleeper=lambda _s: None)
     session = FakeSession(*responses)
     ex.session = session
     return ex, session

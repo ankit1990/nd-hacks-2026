@@ -44,19 +44,24 @@ set -e
 mkdir -p $APP/data/live $APP/logs
 : > $APP/data/live/P104.jsonl
 
-# Clear history with SQL rather than deleting the file: the console holds the same
-# database open, and unlinking it out from under a live reader invites WAL confusion.
-$APP/.venv/bin/python - <<'PY'
+# Reset through the console so every open browser clears too. Doing it with raw SQL
+# would wipe the database but leave the previous run's rows on screen, and the new
+# stream would append to stale content.
+if curl -sf --max-time 8 -X POST http://127.0.0.1:8000/api/reset > /dev/null 2>&1; then
+  echo '    history cleared, consoles reset'
+else
+  echo '    console not reachable; clearing the database directly'
+  $APP/.venv/bin/python -c \"
 import sqlite3, os
 db = '$APP/workspace/careshell.db'
 if os.path.exists(db):
     c = sqlite3.connect(db)
-    for t in ('decisions', 'doses', 'observations'):
-        try: c.execute(f'DELETE FROM {t}')
+    for t in ('decisions','doses','observations'):
+        try: c.execute('DELETE FROM ' + t)
         except sqlite3.OperationalError: pass
     c.commit(); c.close()
-    print('    history cleared')
-PY
+\"
+fi
 : > $APP/workspace/MEMORY.md
 
 # Feeder detached: it just appends, its output is not the interesting part.

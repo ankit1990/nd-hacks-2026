@@ -4,8 +4,8 @@
 # integer 480. The loader coerces it back, but quoting means you never have to know that.
 
 patient_id: P104
-display_name: John Doe
-room: "104"
+display_name: Arthur Pendelton
+room: "104-B"
 
 medications:
   - id: MED_MORNING

@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CareClaw — Personal Timeline View</title>
+<style>
+/* ============================================================================
+   CareClaw PTV — light.
+   One typographic rule: anything the system MEASURED is monospace with tabular
+   figures (times, latency, confidence, indices). Anything it is TELLING you is
+   the humanist sans. Instrument reads differently from narration.
+   Everything else stays quiet: hairlines over borders, one accent per card.
+   ========================================================================= */
+:root{
+  --bg:#F5F5F7; --card:#FFFFFF; --sunk:#FAFAFC;
+  --line:rgba(0,0,0,.08); --line-2:rgba(0,0,0,.13);
+  --ink:#1D1D1F; --ink-2:#6E6E73; --ink-3:#98989D;
+
+  --blue:#0071E3;    --blue-s:#EBF4FE;
+  --amber:#B25000;   --amber-s:#FFF3E6;
+  --teal:#0E8A7D;    --teal-s:#E6F6F4;
+  --green:#248A3D;   --green-s:#EAF6EC;
+  --red:#D70015;     --red-s:#FFEDEE;
+
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Inter,system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  --sh:0 1px 2px rgba(0,0,0,.04), 0 6px 20px -8px rgba(0,0,0,.08);
+  --r:16px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:14px;line-height:1.47;letter-spacing:-.01em;-webkit-font-smoothing:antialiased;
+}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ---- bar ---------------------------------------------------------------- */
+.bar{
+  height:52px;display:flex;align-items:center;gap:14px;padding:0 24px;
+  background:rgba(255,255,255,.8);backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:40;
+}
+.mark{font-size:15px;font-weight:600;letter-spacing:-.02em}
+.mark span{color:var(--ink-3);font-weight:400}
+.bar .sp{flex:1}
+.stat{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-2)}
+.led{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.led.pulse{animation:led 2.6s ease-in-out infinite}
+@keyframes led{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ---- grid --------------------------------------------------------------- */
+.grid{
+  display:grid;grid-template-columns:300px minmax(0,1fr) 288px;gap:20px;
+  padding:20px 24px 48px;max-width:1620px;margin:0 auto;align-items:start;
+}
+.col{display:flex;flex-direction:column;gap:16px}
+.sticky{position:sticky;top:72px}
+
+.card{background:var(--card);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
+.pad{padding:20px}
+.lab{
+  font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 14px;
+}
+
+/* ---- patient ------------------------------------------------------------ */
+.who{display:flex;gap:13px;align-items:center}
+.av{
+  width:46px;height:46px;border-radius:50%;flex:none;display:grid;place-items:center;
+  background:var(--blue-s);color:var(--blue);font-weight:600;font-size:15px;letter-spacing:-.02em;
+}
+.who h1{margin:0;font-size:19px;font-weight:600;letter-spacing:-.03em}
+.who .sub{font-size:12.5px;color:var(--ink-2);margin-top:1px}
+.badge{
+  display:inline-flex;align-items:center;gap:6px;margin-top:14px;padding:5px 11px;
+  border-radius:100px;font-size:12px;font-weight:500;background:var(--amber-s);color:var(--amber);
+}
+.badge.ok{background:var(--green-s);color:var(--green)}
+.badge i{width:6px;height:6px;border-radius:50%;background:currentColor;font-style:normal}
+
+/* ---- edge feed: quiet placeholder, not fake footage --------------------- */
+.feed{position:relative;aspect-ratio:4/3;background:#EDEFF2;overflow:hidden}
+.feed .depth{
+  position:absolute;inset:0;
+  background:radial-gradient(120% 80% at 50% 116%, rgba(0,113,227,.10), transparent 60%),
+             linear-gradient(#F2F4F7,#E7EAEE);
+}
+/* An illustration rather than a photograph or a fake video still. The product's
+   whole claim is that footage never leaves the room, so showing a rendering of
+   what the edge node sees is both honest and on-message. */
+.feed svg{position:absolute;left:50%;top:55%;transform:translate(-50%,-50%);width:66%;height:auto}
+.feed .box{
+  position:absolute;left:50%;top:55%;transform:translate(-50%,-50%);
+  width:52%;height:64%;border:1.5px solid var(--green);border-radius:10px;
+}
+/* Label sits below the frame: the privacy banner owns the top edge. */
+.feed .box span{
+  position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  background:#EFF1F4;padding:0 7px;
+  font-size:10px;font-weight:600;letter-spacing:-.01em;color:var(--green);
+}
+.privacy{
+  position:absolute;top:10px;left:10px;right:10px;padding:6px 9px;border-radius:8px;
+  background:rgba(255,255,255,.88);backdrop-filter:blur(8px);
+  font-size:9.5px;font-weight:500;letter-spacing:.01em;color:var(--ink-2);
+  display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;
+}
+.tele{
+  position:absolute;left:0;right:0;bottom:0;display:flex;gap:14px;padding:9px 14px;
+  background:rgba(255,255,255,.9);backdrop-filter:blur(8px);border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:10px;color:var(--ink-3);
+}
+.tele b{color:var(--ink-2);font-weight:500}
+
+/* ---- gauges ------------------------------------------------------------- */
+.g+.g{margin-top:18px}
+.g .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.g .n{font-size:13px;font-weight:500}
+.g .v{font-family:var(--mono);font-size:13px;font-weight:600}
+.g .s{font-size:11.5px;color:var(--ink-3);margin-top:4px}
+/* Status classes, not per-element colours: a gauge is on target, behind, or urgent. */
+.g.ontrack{--gc:var(--green)}
+.g.behind {--gc:var(--amber)}
+.g.urgent {--gc:var(--red)}
+.g .v{color:var(--gc)}
+.meter{height:6px;border-radius:100px;background:rgba(0,0,0,.06);margin-top:8px;overflow:hidden}
+.meter i{display:block;height:100%;border-radius:100px;background:var(--gc);transform-origin:left;animation:fill 1s cubic-bezier(.2,.8,.2,1) both}
+@keyframes fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+
+/* ---- timeline ----------------------------------------------------------- */
+.tl-head{padding:20px 20px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tl-head h2{margin:0;font-size:19px;font-weight:600;letter-spacing:-.03em}
+.tl-head .date{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.filters{margin-left:auto;display:flex;gap:2px;background:rgba(0,0,0,.045);padding:2px;border-radius:9px}
+.filters button{
+  font:inherit;font-size:12.5px;font-weight:500;padding:5px 12px;border:0;cursor:pointer;
+  background:transparent;color:var(--ink-2);border-radius:7px;transition:.15s;
+}
+.filters button:hover{color:var(--ink)}
+.filters button[aria-pressed=true]{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.09)}
+.filters button:focus-visible,.act:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+/* the spine: vertical distance is proportional to elapsed time, so the quiet
+   four hours after breakfast reads as empty space instead of even spacing */
+.stream{position:relative;padding:4px 20px 26px 0}
+.spine{position:absolute;left:84px;top:6px;bottom:20px;width:2px;border-radius:2px;background:rgba(0,0,0,.07)}
+.ev{position:relative;padding-left:108px}
+.ev .clock{
+  position:absolute;left:0;top:14px;width:70px;text-align:right;
+  font-family:var(--mono);font-size:12.5px;font-weight:500;color:var(--ink-2);
+}
+.ev .clock em{display:block;font-style:normal;font-size:10px;color:var(--ink-3);margin-top:2px}
+.node{
+  position:absolute;left:78px;top:17px;width:14px;height:14px;border-radius:50%;
+  background:var(--card);box-shadow:0 0 0 3px var(--card);z-index:2;
+}
+.node::after{content:"";position:absolute;inset:2px;border-radius:50%;background:currentColor}
+
+.gap{position:relative;height:var(--h)}
+.gap::before{
+  content:attr(data-gap);position:absolute;left:108px;top:50%;transform:translateY(-50%);
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+}
+
+.evcard{
+  background:var(--card);border-radius:14px;padding:16px 18px;
+  box-shadow:0 1px 2px rgba(0,0,0,.05),0 6px 18px -10px rgba(0,0,0,.10);
+  transition:transform .2s cubic-bezier(.2,.8,.2,1),box-shadow .2s;
+}
+.evcard:hover{transform:translateY(-1px);box-shadow:0 2px 4px rgba(0,0,0,.06),0 12px 26px -12px rgba(0,0,0,.16)}
+.tag{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:100px;
+  font-size:11.5px;font-weight:600;letter-spacing:-.005em;background:var(--s);color:var(--c);
+}
+.esc{
+  margin-left:8px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.06em;
+  padding:3px 8px;border-radius:100px;background:var(--red-s);color:var(--red);
+}
+.evtitle{margin:12px 0 0;font-size:15.5px;font-weight:600;letter-spacing:-.022em}
+.evbody{margin:5px 0 0;font-size:13.5px;color:var(--ink-2);max-width:62ch}
+.taken{
+  margin-top:13px;padding:10px 12px;border-radius:10px;background:var(--sunk);
+  font-size:13px;color:var(--ink-2);
+}
+.taken b{color:var(--ink);font-weight:600}
+.conf{
+  display:flex;align-items:center;gap:8px;margin-top:13px;
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+}
+.confbar{width:48px;height:4px;border-radius:100px;background:rgba(0,0,0,.07);overflow:hidden}
+.confbar i{display:block;height:100%;background:var(--c);border-radius:100px}
+
+/* the single unacknowledged acute alert is the only thing allowed to move */
+.ev.acute .node{animation:halo 2.2s ease-out infinite}
+@keyframes halo{0%{box-shadow:0 0 0 3px var(--card),0 0 0 3px rgba(215,0,21,.5)}
+                70%{box-shadow:0 0 0 3px var(--card),0 0 0 14px rgba(215,0,21,0)}
+                100%{box-shadow:0 0 0 3px var(--card),0 0 0 0 rgba(215,0,21,0)}}
+.ev.acute .evcard{box-shadow:0 0 0 1.5px rgba(215,0,21,.28),0 8px 24px -12px rgba(215,0,21,.4)}
+.ev.acute.ackd .node{animation:none}
+.ev.acute.ackd .evcard{box-shadow:0 1px 2px rgba(0,0,0,.05);opacity:.55}
+.ev.acute.ackd .esc{background:rgba(0,0,0,.05);color:var(--ink-3)}
+
+.ev.enter{animation:enter .5s cubic-bezier(.2,.85,.3,1)}
+@keyframes enter{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+.ev.enter .evcard{animation:flash 3s ease-out}
+@keyframes flash{0%,20%{box-shadow:0 0 0 2px var(--c),0 8px 24px -12px var(--c)}100%{}}
+.newtag{
+  margin-left:8px;font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.08em;
+  color:var(--blue);background:var(--blue-s);padding:3px 7px;border-radius:100px;animation:fade 7s forwards;
+}
+@keyframes fade{0%,72%{opacity:1}100%{opacity:0}}
+
+/* ---- right rail --------------------------------------------------------- */
+.act{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;
+  font:inherit;font-size:13.5px;font-weight:500;padding:12px 14px;border-radius:11px;
+  background:var(--sunk);border:1px solid var(--line);color:var(--ink);transition:.15s;
+}
+.act+.act{margin-top:9px}
+.act:hover{background:#F0F1F4}
+.act .ic{width:16px;text-align:center;flex:none;color:var(--ink-3)}
+.act.danger{background:var(--red);border-color:var(--red);color:#fff}
+.act.danger .ic{color:#fff}
+.act.danger:hover{background:#BE0012}
+.act.danger.pulse{animation:btn 2.2s ease-in-out infinite}
+@keyframes btn{0%,100%{box-shadow:0 0 0 0 rgba(215,0,21,0)}50%{box-shadow:0 0 0 5px rgba(215,0,21,.14)}}
+.act.done{background:var(--green-s);border-color:transparent;color:var(--green);animation:none;cursor:default}
+.act.done .ic{color:var(--green)}
+
+.family{background:var(--card);border-radius:var(--r);box-shadow:var(--sh);padding:20px}
+.family h3{margin:0;font-size:14px;font-weight:600;letter-spacing:-.02em}
+.family .stamp{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-top:3px}
+.family p{margin:12px 0 0;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+.sent{display:flex;gap:18px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.sent div{font-size:11px;color:var(--ink-3)}
+.sent b{display:block;font-family:var(--mono);font-size:16px;font-weight:600;color:var(--ink);margin-bottom:2px}
+
+.log{margin-top:12px;font-size:12.5px;color:var(--ink-2);display:none}
+.log.on{display:block}
+.log b{color:var(--green)}
+
+@media (max-width:1200px){
+  .grid{grid-template-columns:280px minmax(0,1fr)}
+  .rail{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .sticky{position:static}
+}
+@media (max-width:820px){
+  .grid{grid-template-columns:1fr;padding:14px}
+  .rail{grid-template-columns:1fr}
+  .spine{left:66px}.ev{padding-left:88px}.node{left:60px}
+  .ev .clock{width:52px}.gap::before{left:88px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="mark">CareClaw <span>· Personal Timeline View</span></div>
+  <div class="sp"></div>
+  <div class="stat"><span class="led pulse"></span>Edge node online</div>
+  <div class="stat mono" id="clock">--:--:--</div>
+</div>
+
+<div class="grid">
+
+  <div class="col sticky">
+    <div class="card">
+      <div class="pad">
+        <div class="who">
+          <div class="av">AP</div>
+          <div>
+            <h1>Arthur Pendelton</h1>
+            <div class="sub">Room 104-B · Age 84</div>
+          </div>
+        </div>
+        <div class="badge" id="statusBadge"><i></i>Minor anomaly logged</div>
+      </div>
+
+      <div class="feed">
+        <div class="depth"></div>
+
+        <svg viewBox="0 0 200 152" role="img"
+             aria-label="Arthur seated in his armchair, in view of the room sensor">
+          <g fill="none" stroke="#0071E3" stroke-opacity=".34" stroke-width="2.4"
+             stroke-linecap="round" stroke-linejoin="round">
+            <!-- armchair -->
+            <path d="M62 62q0-9 9-9h58q9 0 9 9v42H62z" fill="rgba(0,113,227,.05)"/>
+            <path d="M52 96q0-8 8-8h80q8 0 8 8v14q0 6-6 6H58q-6 0-6-6z" fill="rgba(0,113,227,.05)"/>
+            <path d="M52 84q-8 0-8 8v20q0 5 5 5h3" />
+            <path d="M148 84q8 0 8 8v20q0 5-5 5h-3" />
+            <path d="M62 116v14M138 116v14" />
+          </g>
+          <g fill="rgba(0,113,227,.20)" stroke="#0071E3" stroke-opacity=".5"
+             stroke-width="2.4" stroke-linejoin="round">
+            <!-- Arthur: seated, hands in lap -->
+            <path d="M100 30a13 13 0 1 1 0 26 13 13 0 0 1 0-26z"/>
+            <path d="M87 40q-1-13 13-13t13 13q-4-6-13-6t-13 6z" fill="rgba(0,113,227,.32)" stroke="none"/>
+            <path d="M83 96q-3-30 17-34 20 4 17 34-17 5-34 0z"/>
+            <path d="M84 74q-9 5-8 20M116 74q9 5 8 20"/>
+            <path d="M92 96v22h6V96zM102 96v22h6V96z" stroke-opacity=".38"/>
+          </g>
+        </svg>
+
+        <div class="box"><span>Arthur · in view</span></div>
+        <div class="privacy">🔒 Local edge processing · no cloud video</div>
+        <div class="tele">
+          <span>FPS&nbsp;<b>30</b></span>
+          <span>VLM&nbsp;<b>14ms</b></span>
+          <span>Device&nbsp;<b>Local edge</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="pad">
+        <p class="lab">Daily activity</p>
+
+        <!-- Same rule as the timeline: the colour states whether the reading is on
+             target, not what it is about. Hydration is behind, so it is amber. -->
+        <div class="g behind">
+          <div class="row"><span class="n">Hydration</span><span class="v">3 / 5 cups</span></div>
+          <div class="meter"><i style="width:60%"></i></div>
+          <div class="s">Behind target · 2 cups remaining before 20:00</div>
+        </div>
+
+        <div class="g ontrack">
+          <div class="row"><span class="n">Mobility / gait index</span><span class="v">88 / 100</span></div>
+          <div class="meter"><i style="width:88%;animation-delay:.1s"></i></div>
+          <div class="s">Stable · within 14-day baseline</div>
+        </div>
+
+        <div class="g ontrack">
+          <div class="row"><span class="n">Rest / lethargy</span><span class="v">2.5 hrs</span></div>
+          <div class="meter"><i style="width:42%;animation-delay:.2s"></i></div>
+          <div class="s">Active afternoon · below 4.0 hr typical</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <div class="tl-head">
+        <h2>Today's event stream</h2>
+        <span class="date">Tue 14 Mar 2026</span>
+        <div class="filters">
+          <button data-f="all" aria-pressed="true">All</button>
+          <button data-f="alert" aria-pressed="false">Alerts</button>
+          <button data-f="med" aria-pressed="false">Medications</button>
+          <button data-f="activity" aria-pressed="false">Activity</button>
+        </div>
+      </div>
+      <div class="stream" id="stream"><div class="spine"></div></div>
+    </div>
+  </div>
+
+  <div class="col rail sticky">
+    <div class="card">
+      <div class="pad">
+        <p class="lab">Active interventions</p>
+        <button class="act danger pulse" id="ackFall"><span class="ic">▲</span><span>Acknowledge fall alert</span></button>
+        <button class="act" id="speak"><span class="ic">◉</span><span>Trigger room speaker prompt</span></button>
+        <button class="act" id="note"><span class="ic">✎</span><span>Log manual nurse note</span></button>
+        <div class="log" id="actionLog"></div>
+      </div>
+    </div>
+
+    <div class="family">
+      <h3>Family portal summary</h3>
+      <div class="stamp">Updated 17:42 · sends daily at 18:00</div>
+      <p>Arthur had a social afternoon with visitors. Morning routine was delayed by
+         15 minutes, but hydration is being monitored.</p>
+      <div class="sent">
+        <div><b>45m</b>Visitor time</div>
+        <div><b>3/5</b>Cups today</div>
+        <div><b>88</b>Gait index</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Colour encodes SEVERITY, never topic.
+   Green means "this went well" and nothing else — an event that is merely about
+   hydration or activity is not green unless the reading is actually on target.
+   Topic is carried by the icon and the label, which are free to say "hydration"
+   while the colour says "this needs attention". */
+const SEV = {
+  good:     {c:'var(--green)', s:'var(--green-s)'},   // on target, compliant
+  caution:  {c:'var(--amber)', s:'var(--amber-s)'},   // off target, needs follow-up
+  critical: {c:'var(--red)',   s:'var(--red-s)'},     // acute, needs someone now
+  info:     {c:'var(--blue)',  s:'var(--blue-s)'},    // neutral, needs a human decision
+};
+
+const KIND = {
+  delay:    {sev:'caution',  label:'Routine delay',   icon:'◔',  group:'med'},
+  hydration:{sev:'caution',  label:'Hydration alert', icon:'💧', group:'activity'},
+  social:   {sev:'good',     label:'Quality of life', icon:'◈',  group:'activity'},
+  acute:    {sev:'critical', label:'Critical alert',  icon:'▲',  group:'alert'},
+  system:   {sev:'info',     label:'Needs review',    icon:'◇',  group:'alert'},
+};
+
+const EVENTS = [
+  { t:'09:15', kind:'delay', title:'Morning medication skipped',
+    body:'Morning pill bottle remained unopened 15 minutes past the scheduled 09:00 window.',
+    action:'Queued soft local voice reminder.', conf:94, alert:true },
+  { t:'13:30', kind:'hydration', title:'Low cumulative fluid intake',
+    body:'Only 2 of 5 target water glasses logged by early afternoon. Early UTI prevention flag raised.',
+    conf:89, alert:true },
+  { t:'15:00', kind:'social', title:'Active social interaction',
+    body:'45 minutes of continuous visitor interaction and positive movement detected.',
+    conf:96 },
+  { t:'17:10', kind:'acute', title:'Acute fall detected',
+    body:'High-velocity vertical posture change detected near the armchair.',
+    action:'Instant escalation to Nurse Mobile App.', conf:99, escalated:true, alert:true },
+];
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const mins = t => { const [h,m] = t.split(':').map(Number); return h*60+m; };
+const ampm = t => {
+  const [h,m] = t.split(':').map(Number);
+  return `${String(h%12||12).padStart(2,'0')}:${String(m).padStart(2,'0')} ${h<12?'AM':'PM'}`;
+};
+
+const stream = document.getElementById('stream');
+
+function eventNode(e, live){
+  const k = KIND[e.kind] || KIND.system;
+  const sev = SEV[k.sev] || SEV.info;
+  const el = document.createElement('div');
+  el.className = 'ev' + (k.sev==='critical' ? ' acute' : '') + (live ? ' enter' : '');
+  el.style.setProperty('--c', sev.c);
+  el.style.setProperty('--s', sev.s);
+  el.dataset.group = k.group;
+  el.dataset.sev = k.sev;
+  // Anything that is not "good" belongs in the alerts filter.
+  el.dataset.alert = k.sev === 'good' ? '0' : '1';
+  const [hm, mer] = ampm(e.t).split(' ');
+  el.innerHTML = `
+    <div class="clock">${esc(hm)}<em>${esc(mer)}</em></div>
+    <div class="node" style="color:${sev.c}"></div>
+    <div class="evcard">
+      <div>
+        <span class="tag">${k.icon} ${esc(k.label)}</span>
+        ${e.escalated ? '<span class="esc">ESCALATED</span>' : ''}
+        ${live ? '<span class="newtag">NEW</span>' : ''}
+      </div>
+      <p class="evtitle">${esc(e.title)}</p>
+      <p class="evbody">${esc(e.body)}</p>
+      ${e.action ? `<div class="taken"><b>Action taken.</b> ${esc(e.action)}</div>` : ''}
+      <div class="conf">Confidence ${e.conf}%<span class="confbar"><i style="width:${e.conf}%"></i></span></div>
+    </div>`;
+  return el;
+}
+
+function gapNode(from, to){
+  // Absolute, so the label reads the same whether the stream is built oldest-first
+  // on load or newest-first as events arrive.
+  const d = Math.abs(mins(to) - mins(from));
+  const g = document.createElement('div');
+  g.className = 'gap';
+  g.style.setProperty('--h', `${Math.max(34, Math.min(d*0.4, 120))}px`);
+  const h = Math.floor(d/60), m = d%60;
+  g.dataset.gap = h ? `${h}h${m ? ' '+m+'m' : ''} quiet` : `${m}m`;
+  return g;
+}
+
+/* The timeline shows whatever CareShell has actually decided. The scripted EVENTS
+   above are a fallback for a cold database so the page is never blank on open.
+
+   Newest first: the row a nurse needs is the one that just happened, so it belongs
+   at the top where the eye lands, not at the bottom of a growing list. Reading down
+   the page walks backwards through the day. */
+let newestTime = null;       // time of the current top row
+let oldestTime = null;       // time of the current bottom row
+let usingScripted = false;   // true when the DB was empty and EVENTS is on screen
+
+function addNewest(e, live){
+  const node = eventNode(e, live);
+  // gapNode(from, to) measures to - from; the arriving event is the later one.
+  if (newestTime) stream.insertBefore(gapNode(newestTime, e.t), stream.firstChild.nextSibling);
+  stream.insertBefore(node, stream.firstChild.nextSibling);   // after .spine
+  newestTime = e.t;
+  if (!oldestTime) oldestTime = e.t;
+  return node;
+}
+
+function addOldest(e){
+  if (oldestTime) stream.appendChild(gapNode(e.t, oldestTime));
+  stream.appendChild(eventNode(e, false));
+  oldestTime = e.t;
+  if (!newestTime) newestTime = e.t;
+}
+
+function clearStream(){
+  stream.querySelectorAll('.ev, .gap').forEach(n => n.remove());
+  newestTime = oldestTime = null;
+  usingScripted = false;
+}
+
+function toEvent(d){
+  const map = CODE_MAP[d.code];
+  if (!map) return null;
+  const ts = new Date(d.ts);
+  const t = isNaN(ts) ? new Date().toTimeString().slice(0,5)
+    : `${String(ts.getHours()).padStart(2,'0')}:${String(ts.getMinutes()).padStart(2,'0')}`;
+  return {t, kind:map.kind, title:map.title, body:d.message,
+          conf:97, escalated:map.escalated};
+}
+
+function renderScripted(){
+  usingScripted = true;
+  // EVENTS is chronological; the page is newest-first, so walk it backwards.
+  [...EVENTS].reverse().forEach(e => addOldest(e));
+}
+
+fetch('/api/overview?limit=100')
+  .then(r => r.json())
+  .then(o => {
+    // /api/overview already returns newest first.
+    const real = (o.decisions || []).map(toEvent).filter(Boolean);
+    if (real.length) real.forEach(e => addOldest(e));
+    else renderScripted();
+    const p = o.patient || {};
+    if (p.name && p.name !== 'Unknown') {
+      document.querySelector('.who h1').textContent = p.name;
+      document.querySelector('.who .sub').textContent = `Room ${p.room} · Age 84`;
+      document.querySelector('.av').textContent =
+        p.name.split(/\s+/).map(w => w[0]).join('').slice(0,2).toUpperCase();
+      document.querySelector('.feed .box span').textContent =
+        `${p.name.split(/\s+/)[0]} · in view`;
+    }
+  })
+  .catch(renderScripted);
+
+let filter = 'all';
+document.querySelectorAll('.filters button').forEach(b => {
+  b.addEventListener('click', () => {
+    filter = b.dataset.f;
+    document.querySelectorAll('.filters button').forEach(x => x.setAttribute('aria-pressed', String(x===b)));
+    stream.querySelectorAll('.ev').forEach(ev => {
+      const ok = filter==='all' || (filter==='alert' ? ev.dataset.alert==='1' : ev.dataset.group===filter);
+      ev.style.display = ok ? '' : 'none';
+    });
+    // gaps only mean something when every event is shown
+    stream.querySelectorAll('.gap').forEach(g => g.style.display = filter==='all' ? '' : 'none');
+  });
+});
+
+const logEl = document.getElementById('actionLog');
+function logAction(t){
+  logEl.classList.add('on');
+  logEl.innerHTML = `<b>✓</b> ${esc(t)} · <span class="mono">${new Date().toLocaleTimeString([], {hour12:false})}</span>`;
+}
+document.getElementById('ackFall').addEventListener('click', ev => {
+  const b = ev.currentTarget;
+  if (b.classList.contains('done')) return;
+  b.classList.remove('danger','pulse'); b.classList.add('done');
+  b.querySelector('span:last-child').textContent = 'Fall alert acknowledged';
+  b.querySelector('.ic').textContent = '✓';
+  stream.querySelector('.ev.acute')?.classList.add('ackd');
+  const badge = document.getElementById('statusBadge');
+  badge.classList.add('ok');
+  badge.innerHTML = '<i></i>Baseline normal';
+  logAction('Fall alert acknowledged by nurse station');
+});
+document.getElementById('speak').addEventListener('click', () => logAction('Room speaker prompt sent to 104-B'));
+document.getElementById('note').addEventListener('click', () => logAction('Manual nurse note logged'));
+
+const clock = document.getElementById('clock');
+const tick = () => clock.textContent = new Date().toLocaleTimeString([], {hour12:false});
+tick(); setInterval(tick, 1000);
+
+/* Live CareShell decisions land on the same spine, mapped into this vocabulary
+   so there is one visual language for scripted and real events. */
+/* MED_ON_TIME is the only code that maps to a green kind. Everything else is
+   caution, critical or neutral — a blocked dose is not a success story. */
+const CODE_MAP = {
+  MED_ON_TIME:            {kind:'social', title:'Medication taken on time'},
+  MED_OUT_OF_WINDOW:      {kind:'delay',  title:'Medication taken outside window'},
+  DOUBLE_DOSE_BLOCKED:    {kind:'acute',  title:'Double dose blocked', escalated:true},
+  MAX_DAILY_DOSES_BLOCKED:{kind:'acute',  title:'Daily limit blocked', escalated:true},
+  MISSED_DOSE:            {kind:'delay',  title:'Medication window closed empty'},
+  NIGHT_OUT_OF_BED:       {kind:'acute',  title:'Night wandering detected', escalated:true},
+  NEEDS_HUMAN_REVIEW:     {kind:'system', title:'Needs human review'},
+};
+
+function connect(){
+  let ws;
+  try { ws = new WebSocket(`ws://${location.host}/ws/events`); } catch(_) { return; }
+  ws.onmessage = m => {
+    let d; try { d = JSON.parse(m.data); } catch(_) { return; }
+
+    // A demo run starts by clearing every console, so the stream is not appended
+    // to whatever the previous run left on screen.
+    if (d.type === 'reset') { clearStream(); return; }
+
+    const e = toEvent(d); if (!e) return;
+    if (usingScripted) clearStream();      // real events replace the canned fallback
+    const node = addNewest(e, true);
+    node.scrollIntoView({block:'center', behavior:'smooth'});
+    setTimeout(() => node.classList.remove('enter'), 7200);
+  };
+  ws.onclose = () => setTimeout(connect, 2500);
+  ws.onerror = () => ws.close();
+}
+connect();
+</script>
+</body>
+</html>

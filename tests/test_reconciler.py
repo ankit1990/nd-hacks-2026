@@ -10,7 +10,7 @@ from datetime import date, datetime
 import pytest
 
 from careshell.reconciler import MAX_MISSED_DOSE_BACKFILL_DAYS, CareReconciler
-from tests.conftest import bed, codes, entry, intake
+from tests.conftest import PLAN, bed, codes, entry, intake
 
 
 # ------------------------------------------------------------------ happy path
@@ -24,7 +24,8 @@ def test_dose_inside_window_is_recorded_on_time(reconciler, store):
 def test_on_time_message_names_the_real_medication(reconciler):
     out = reconciler.process(entry("e1", "2026-03-14T07:58:00"), intake())
     assert "Beta Blocker" in out[0].message
-    assert "John" in out[0].message
+    # Derived from the plan, not hardcoded: the patient's name lives in care_plan.yaml.
+    assert PLAN["display_name"].split()[0] in out[0].message
     assert out[0].speak is True
 
 
