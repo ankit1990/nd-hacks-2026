@@ -101,34 +101,44 @@ class CareReconciler:
         self._log_memory(fresh)
         return fresh
 
-    def tick(self, now: datetime) -> list[Decision]:
+    def tick(self, now: datetime, check_behavior: bool = True) -> list[Decision]:
         """Time-driven checks: closed medication windows and prolonged night absence.
 
         Idempotent and safe to call repeatedly; it only considers the span since the
         last call.
+
+        `check_behavior=False` runs the medication checks only. The end-of-day flush
+        uses it: a medication window closing empty is a fact the timeline establishes,
+        but bed occupancy after the last observation is unknown, not "still out of bed".
         """
         since = self._checked_through
         self._checked_through = now
         if since is not None and now < since:
             return []   # out-of-order entry; timeline.py sorts, so this is defensive
         decisions = self._closed_windows(since, now)
-        decisions += self._prolonged_out_of_bed(now)
+        if check_behavior:
+            decisions += self._prolonged_out_of_bed(now)
         return decisions
 
-    def tick_and_emit(self, now: datetime) -> list[Decision]:
+    def tick_and_emit(self, now: datetime, check_behavior: bool = True) -> list[Decision]:
         """Advance the clock with no observation attached, persisting what fires.
 
         Used by streaming replay, where a window closing at 08:30 should surface at
         08:30 of virtual time rather than waiting for the next observation.
         """
         with self.store.transaction():
-            fresh = self._persist(self.tick(now))
+            fresh = self._persist(self.tick(now, check_behavior))
         self._log_memory(fresh)
         return fresh
 
     def flush(self, through: datetime) -> list[Decision]:
-        """Run the final time-based checks after the last observation."""
-        return self.tick_and_emit(through)
+        """Close out medication windows after the last observation.
+
+        Behavioural checks are skipped: with no further observations, bed occupancy is
+        unknown rather than unchanged. Running them here reported a patient who got up
+        at 07:41 and was never seen returning as night-wandering at 23:59.
+        """
+        return self.tick_and_emit(through, check_behavior=False)
 
     # ------------------------------------------------------------ medication policy
 
@@ -243,7 +253,14 @@ class CareReconciler:
         if not self._within(now, behavior["night_start"], behavior["night_end"]):
             return []
 
-        elapsed = (now - self._out_of_bed_since).total_seconds() / 60
+        # Count only the part of the absence that falls inside sleep hours.
+        #
+        # Without this, a patient who got up at 07:41 and whose return was never
+        # recorded is reported at the end-of-day flush as "out of bed since 07:41
+        # (978 minutes) during sleep hours" -- an alarming night-wandering alert for
+        # someone who simply spent the day out of bed. Observed on a live run.
+        since = max(self._out_of_bed_since, self._night_start_before(now, behavior))
+        elapsed = (now - since).total_seconds() / 60
         if elapsed < behavior["max_out_of_bed_minutes_at_night"]:
             return []
 
@@ -253,9 +270,19 @@ class CareReconciler:
             f"night:{self.patient_id}:{self._out_of_bed_since.isoformat()}",
             "NIGHT_OUT_OF_BED",
             None,
-            f"Out of bed since {self._out_of_bed_since:%H:%M} "
-            f"({int(elapsed)} minutes) during sleep hours.",
+            f"Out of bed for {int(elapsed)} minutes during sleep hours "
+            f"(since {since:%H:%M}).",
         )]
+
+    @staticmethod
+    def _night_start_before(now: datetime, behavior: dict) -> datetime:
+        """The most recent night_start at or before `now`.
+
+        Sleep hours usually span midnight (22:00-06:00), so at 02:00 the relevant
+        night_start is 22:00 on the *previous* day.
+        """
+        start = datetime.combine(now.date(), parse_hhmm(behavior["night_start"]))
+        return start if start <= now else start - timedelta(days=1)
 
     # ---------------------------------------------------------------------- helpers
 

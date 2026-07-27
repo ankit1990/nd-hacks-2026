@@ -178,6 +178,38 @@ def test_recent_adherence_groups_by_day_and_med(store):
     }
 
 
+# -------------------------------------------- night absence counts only sleep hours
+
+def test_daytime_absence_is_not_reported_as_night_wandering(reconciler):
+    """Live-run bug: a 07:41 bed exit with no return read as 978 night-time minutes."""
+    reconciler.process(entry("e1", "2026-03-14T07:41:00"), bed("BED_EXIT"))
+    out = reconciler.flush(datetime(2026, 3, 14, 23, 59, 59))
+    assert "NIGHT_OUT_OF_BED" not in codes(out)
+
+
+def test_absence_crossing_into_night_counts_from_night_start(reconciler):
+    reconciler.process(entry("e1", "2026-03-14T20:00:00"), bed("BED_EXIT"))
+    out = reconciler.process(entry("e2", "2026-03-14T22:40:00"), bed("BED_EXIT"))
+    alert = next(d for d in out if d.code == "NIGHT_OUT_OF_BED")
+    assert "40 minutes" in alert.message      # from 22:00, not from 20:00
+    assert "22:00" in alert.message
+
+
+def test_absence_wholly_inside_night_is_unchanged(reconciler):
+    reconciler.process(entry("e1", "2026-03-15T02:14:00"), bed("BED_EXIT"))
+    out = reconciler.process(entry("e2", "2026-03-15T02:41:00"), bed("BED_EXIT"))
+    alert = next(d for d in out if d.code == "NIGHT_OUT_OF_BED")
+    assert "27 minutes" in alert.message
+    assert "02:14" in alert.message
+
+
+def test_night_start_resolves_to_previous_day_after_midnight(plan):
+    """At 02:00 the relevant night_start is 22:00 yesterday, not today."""
+    assert CareReconciler._night_start_before(
+        datetime(2026, 3, 15, 2, 0), plan["behavior"]
+    ) == datetime(2026, 3, 14, 22, 0)
+
+
 # ------------------------------------------------------- crash atomicity (invariants)
 
 def test_partial_write_rolls_back_completely(plan, tmp_path):

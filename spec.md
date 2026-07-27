@@ -73,7 +73,7 @@ Two consequences that fall out of this rule:
                                     v
 +------------------------------------------------------------------------------+
 | EXTRACTOR (careshell/extractor.py)                                           |
-|   LLMExtractor -> vLLM at inference.local, OpenAI-compatible /v1             |
+|   LLMExtractor -> https://inference.local/v1 (OpenAI-compatible)            |
 |   Prompt carries the patient's med IDs; model picks from that enum or null   |
 |   Out: CareEvent (Pydantic-validated, one retry, degrades to human review)   |
 +------------------------------------------------------------------------------+
@@ -100,7 +100,7 @@ Two consequences that fall out of this rule:
 | OPENSHELL SANDBOX (managed by NemoClaw)                                      |
 |   Landlock: filesystem    seccomp: syscalls    <- kernel-enforced            |
 |   Egress: userspace CONNECT proxy + OPA        <- NOT a kernel packet filter |
-|   Allowed: inference.local (vLLM), loopback, LAN ingress :8000               |
+|   Allowed: https://inference.local, loopback; console via gRPC forward       |
 +------------------------------------------------------------------------------+
 ```
 
@@ -118,11 +118,12 @@ careshell/
 ├── data/patients/P104.jsonl      demo timeline
 ├── data/live/                    live feed target (gitignored)
 ├── openshell/
-│   └── careshell-preset.yaml     POLICY DELTA, never a full replacement
+│   └── careshell-preset.yaml     optional network preset (not needed by default)
 ├── deploy/
-│   ├── deploy.sh                 policy + deps + console
-│   ├── preflight.sh              8 checks, all from inside the sandbox
-│   └── demo.sh                   streaming demo
+│   ├── deploy.sh                 sync + deps + model + console + forward
+│   ├── preflight.sh              11 checks, all from inside the sandbox
+│   ├── demo.sh                   streaming demo
+│   └── pick_model.py             choose a chat-capable model id
 ├── tools/
 │   └── feed_timeline.py          push a source file into a live feed (stdlib only)
 ├── careshell/
@@ -136,7 +137,7 @@ careshell/
 │   └── run.py                    CLI
 ├── alerting/                     tts_engine.py, lan_broadcaster.py
 ├── dashboard/                    app.py, templates/index.html
-└── tests/                        93 tests
+└── tests/                        133 tests
 ```
 
 ---
@@ -285,28 +286,45 @@ exposed inside the sandbox as `inference.local`.
 **Both NemoClaw and OpenShell are Apache-2.0 and explicitly alpha — verify CLI flag names
 against your installed version before demo day.**
 
-### Step 1 — verify vLLM from *inside* the sandbox
+### Step 1 — verify inference from *inside* the sandbox
 
 ```bash
-nemoclaw careshell exec -- curl -s http://inference.local/v1/models
+nemoclaw <sandbox> exec -- curl -s https://inference.local/v1/models
 ```
 
-Never test from the host: the host can reach things the sandbox cannot. The returned `id`
-is what `--model` needs. `deploy.sh` resolves it automatically and writes it to
-`.careshell-model`.
+**https, not http** — plain http is refused by the egress proxy with a 403. Never test
+from the host: the host can reach things the sandbox cannot.
 
-### Step 2 — apply a policy *delta*
+Do not take `data[0]` as the model id. On an OpenAI-backed gateway that is often
+`text-embedding-ada-002`, which cannot serve chat completions and makes every extraction
+fail. `deploy/pick_model.py` prefers the sandbox's configured model and skips embedding,
+audio and image ids; `deploy.sh` writes the result to `.careshell-model`.
+
+Servers also disagree on the output-length parameter: vLLM takes `max_tokens`, newer
+OpenAI-hosted models require `max_completion_tokens`. `careshell/extractor.py` negotiates
+this once on the first 400 and remembers it, so one build works against either.
+
+### Step 2 — policy: usually nothing to do
+
+Verified against nemoclaw v0.0.93 / openshell 0.0.85 by reading the live policy and the
+preset schema:
 
 ```bash
-nemoclaw careshell policy-add --from-file openshell/careshell-preset.yaml
-nemoclaw careshell policy-show | grep inference.local
+nemoclaw <sandbox> policy-get            # note: policy-get, not policy-show
 ```
 
-`policy-add` layers onto NemoClaw's baseline. **Never `openshell policy set`** — that
-replaces the baseline and silently strips `inference.local`, the gateway dial-back
-WebSocket, and writable `/dev/pts`, which breaks the exec tool. The failure is invisible
-until the agent tries to use them, so `deploy.sh` greps `policy-show` and aborts if
-`inference.local` disappeared.
+The baseline already grants `read_write` on `/sandbox` (where the app lives) and routes
+`inference.local`. **CareShell needs no policy delta.**
+
+Presets are **network-only** — `schemas/policy-preset.schema.json` has exactly two
+top-level keys, `preset` and `network_policies`. A preset cannot declare filesystem
+mounts or ingress rules, so the earlier draft of this spec described a policy model that
+does not exist. Code enters the sandbox with `nemoclaw <sandbox> upload`, and the console
+reaches the host through `openshell forward service`, not an ingress CIDR.
+
+If you do need extra egress (an EHR host on the LAN, say), add it with `policy-add`,
+which layers onto the baseline. **Never `openshell policy set`** — that replaces the
+baseline and silently strips `inference.local` and the gateway dial-back WebSocket.
 
 ### Step 3 — state the egress guarantee accurately
 
@@ -318,7 +336,7 @@ allowlist. The kernel-enforced parts of the sandbox are **Landlock** (filesystem
 Say it that way in the demo, because what appears on screen is:
 
 ```
-curl: (56) Received HTTP code 403 from proxy after CONNECT
+curl: (56) CONNECT tunnel failed, response 403
 ```
 
 — visibly a proxy refusal. Claiming a "kernel-level network lock" and then showing a 403
@@ -337,7 +355,7 @@ it does not run the model.
 
 1. **Safety logic first.** `pytest tests/test_reconciler.py` — pure functions over
    fixtures, no GPU, model, or network. If only one thing works on demo day, make it this.
-2. **Full suite.** `PYTHONPATH=. pytest` — 93 tests, all offline.
+2. **Full suite.** `PYTHONPATH=. pytest` — 133 tests, all offline.
 3. **Demo timeline.** `python -m careshell.run data/patients/P104.jsonl --offline
    --trust-keywords --console '' --no-tts` must surface `MED_ON_TIME`,
    `DOUBLE_DOSE_BLOCKED`, `NIGHT_OUT_OF_BED`, and `MISSED_DOSE`.
@@ -350,7 +368,7 @@ it does not run the model.
 7. **Inference outage.** Point `--endpoint` at a dead port. The run completes, every line
    becomes a review item, no traceback, no doses recorded.
 8. **Egress.** `nemoclaw careshell exec -- curl -I https://example.com` → refused at the
-   proxy. Then `curl -s http://inference.local/v1/models` → success. Both halves matter:
+   proxy. Then `curl -s https://inference.local/v1/models` → success. Both halves matter:
    the second proves the policy delta did not strip the baseline.
 9. **Streaming parity.** Batch and `--stream` over the same timeline produce an identical
    decision set (`tests/test_pipeline.py::test_stream_mode_produces_the_same_decisions`).

@@ -1,58 +1,54 @@
-# CareShell OpenShell preset -- a POLICY DELTA, layered on NemoClaw's baseline.
+# CareShell OpenShell policy preset — OPTIONAL, and not applied by default.
 #
-# Apply with:
-#     nemoclaw careshell policy-add --from-file openshell/careshell-preset.yaml
+#   nemoclaw <sandbox> policy-add --from-file openshell/careshell-preset.yaml --yes
 #
-# Do NOT apply with `openshell policy set`. That REPLACES the baseline policy and strips
-# routes the agent needs: inference.local (the attached vLLM), the gateway dial-back
-# WebSocket, and writable /dev/pts (which breaks the exec tool). The failure is silent
-# until the agent tries to use them.
+# Read this before assuming you need it.
 #
-# Verify after applying with `nemoclaw careshell policy-show` -- inference.local and the
-# gateway WebSocket must still be listed.
+# ## CareShell needs no policy delta on a stock NemoClaw sandbox
+#
+# Verified against nemoclaw v0.0.93 / openshell 0.0.85 by reading the live policy
+# (`nemoclaw <sandbox> policy-get`) and the preset schema
+# (~/.nemoclaw/source/schemas/policy-preset.schema.json):
+#
+#   * Filesystem — the baseline already grants read_write on /sandbox and /tmp.
+#     CareShell lives at /sandbox/app, so nothing needs adding. Presets CANNOT declare
+#     filesystem rules at all: the schema's only top-level keys are `preset` and
+#     `network_policies`. There is no mounts/ingress section, and code gets into the
+#     sandbox with `nemoclaw <sandbox> upload`, not a host bind mount.
+#
+#   * Inference — the baseline `local-inference` preset already routes
+#     https://inference.local. Note https: plain http is refused by the egress proxy
+#     with a 403.
+#
+#   * Nurse console — reaching :8000 from the host is a gRPC tunnel, not a policy rule:
+#         openshell forward service --target-port 8000 --local 8000 <sandbox>
+#
+#   * Egress — denial is by OMISSION from the allowlist. There is no `egress: deny-all`
+#     key. OpenShell enforces it with a userspace HTTP CONNECT proxy plus OPA, NOT a
+#     kernel packet filter; the kernel-enforced parts are Landlock (filesystem) and
+#     seccomp (syscalls). Adding endpoints here WIDENS egress — it never narrows it.
+#
+# ## When you would actually use this file
+#
+# Only to let the sandbox reach an additional host — say a facility EHR on the LAN that
+# supplies the patient timeline. The example below is commented out because granting
+# egress to a stock demo would weaken the air-gap claim the demo is built on.
 
-name: careshell
+preset:
+  name: careshell
+  description: "CareShell eldercare agent — optional additional egress"
 
-filesystem:
-  mounts:
-    # Source timelines. Read-only: CareShell never edits its own input.
-    - host: ./data/patients
-      container: /app/data/patients
-      mode: ro
-
-    # Live feed directory. Writable so tools/feed_timeline.py can append from the host
-    # while CareShell tails from inside the sandbox.
-    - host: ./data/live
-      container: /app/data/live
-      mode: rw
-
-    # Care plan, SQLite history database, MEMORY.md narrative.
-    - host: ./workspace
-      container: /app/workspace
-      mode: rw
-
-    - host: ./logs
-      container: /app/logs
-      mode: rw
-
-network:
-  ingress:
-    # Nurse station console. LAN only -- adjust the CIDR to your facility subnet.
-    - port: 8000
-      protocol: tcp
-      cidr: 192.168.1.0/24
-
-  # No egress entries are added. Denial is by omission from the allowlist: OpenShell
-  # routes outbound traffic through a userspace HTTP CONNECT proxy evaluated by OPA,
-  # and anything not explicitly allowed is refused with a 403 at the proxy.
-  #
-  # This is NOT a kernel packet filter. The kernel-enforced parts of the sandbox are
-  # Landlock (filesystem) and seccomp (syscalls). Say it that way in the demo -- the
-  # denial you will show on screen is:
-  #     curl: (56) Received HTTP code 403 from proxy after CONNECT
-  # The baseline policy already permits inference.local; do not re-declare it here.
-
-runtime:
-  gpu:
-    enabled: true
-    devices: ["0"]        # GB10
+network_policies:
+  careshell:
+    name: careshell
+    # No endpoints: this preset grants nothing. It exists as a schema-valid starting
+    # point. Uncomment and edit to allow a specific host, then re-apply.
+    endpoints: []
+    #  - host: ehr.facility.local
+    #    port: 443
+    #    protocol: rest
+    #    enforcement: enforce
+    #    rules:
+    #      - allow: { method: GET, path: "/api/patients/**" }
+    #    binaries:
+    #      - { path: /sandbox/app/.venv/bin/python* }

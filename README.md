@@ -119,44 +119,71 @@ nurse-station subnet.
 
 ---
 
-## Deploying to NemoClaw on GB10
-
-Assumes NemoClaw is installed with a vLLM already attached, exposed inside the sandbox as
-`inference.local`.
+## Deploying to NemoClaw
 
 ```bash
-./deploy/deploy.sh careshell      # apply policy delta, install deps, start the console
-./deploy/preflight.sh careshell   # verify GPU, vLLM, egress, mounts, deps, tests
-./deploy/demo.sh careshell 240    # streaming demo
+./deploy/deploy.sh <sandbox>        # sync, deps, resolve model, start console, forward :8000
+./deploy/preflight.sh <sandbox>     # 11 checks, all run from inside the sandbox
+./deploy/demo.sh <sandbox> 2        # streaming demo, 2s between entries
 ```
 
-Three things that matter, in order:
+Verified end to end against **nemoclaw v0.0.93 / openshell 0.0.85**. Both are alpha —
+re-check subcommand names against your installed version.
 
-1. **Verify vLLM from inside the sandbox, never the host.** The host can reach things the
-   sandbox cannot. `preflight.sh` does this and prints the model id to pass to `--model`.
+### What the deployment actually looks like
 
-2. **Apply a policy *delta*, never a full replacement.**
-   `nemoclaw careshell policy-add --from-file openshell/careshell-preset.yaml`.
-   Running `openshell policy set` replaces NemoClaw's baseline and silently strips
-   `inference.local`, the gateway dial-back WebSocket, and writable `/dev/pts` — which
-   breaks the exec tool. `deploy.sh` checks `policy-show` afterward and aborts if
-   `inference.local` vanished.
+Several things differ from what a reading of the NemoClaw docs suggests. These were found
+by running it, not by guessing:
 
-3. **State the egress guarantee accurately.** OpenShell enforces egress with a userspace
-   HTTP CONNECT proxy plus OPA, *not* a kernel packet filter. There is no `egress:
-   deny-all` key; denial is by omission from the allowlist. The kernel-enforced parts are
-   Landlock (filesystem) and seccomp (syscalls). Your air-gap demo prints:
+- **`inference.local` is https.** Plain `http://inference.local` is refused by the egress
+  proxy with a 403. The scheme is not cosmetic.
+- **No policy delta is needed.** The baseline already grants `read_write` on `/sandbox`
+  and routes `inference.local`. Policy presets are **network-only** — the schema's only
+  top-level keys are `preset` and `network_policies`, so a preset *cannot* declare
+  filesystem mounts or ingress rules. See `openshell/careshell-preset.yaml`.
+- **Code gets in via `nemoclaw <sandbox> upload`, not a host bind mount.** Note that
+  `upload <dir> <dest>` places the directory *inside* `dest` as `dest/<basename>`.
+- **The console reaches the host through a gRPC tunnel**, not a policy ingress rule:
+  `openshell forward service --target-port 8000 --local 8000 <sandbox>`.
+- **The sandbox image is PEP 668 managed.** A plain `pip install` fails; a venv is
+  required.
+- **Background processes need `setsid` with stdin detached.** A plain `nohup ... &` inside
+  `exec` is reaped when the exec channel closes.
+- **Don't resolve the model as `data[0]`** from `/v1/models` — on an OpenAI-backed gateway
+  that is often `text-embedding-ada-002`, which cannot serve chat completions.
+  `deploy/pick_model.py` prefers the sandbox's configured model and skips non-chat ids.
+- **Servers disagree on the output-length parameter.** vLLM takes `max_tokens`; newer
+  OpenAI-hosted models reject it and require `max_completion_tokens`. The extractor
+  negotiates this once on the first rejection and remembers the answer, so the same build
+  works against either.
 
-   ```
-   curl: (56) Received HTTP code 403 from proxy after CONNECT
-   ```
+If you apply a preset anyway (`CARESHELL_APPLY_PRESET=1`), use `policy-add`, which layers
+onto the baseline. Never `openshell policy set` — that replaces the baseline and strips
+`inference.local` and the gateway dial-back WebSocket.
 
-   which is visibly a proxy refusal. Describe it as one. The `Dockerfile` has a
-   `--network=none` variant for a genuine kernel-level guarantee, with the caveat that it
-   also blocks `inference.local`.
+### The egress guarantee, stated accurately
 
-Both NemoClaw and OpenShell are Apache-2.0 and explicitly alpha — verify CLI flag names
-against your installed version before demo day.
+OpenShell enforces egress with a userspace HTTP CONNECT proxy plus OPA, **not** a kernel
+packet filter. There is no `egress: deny-all` key; denial is by omission from the
+allowlist. The kernel-enforced parts are Landlock (filesystem) and seccomp (syscalls).
+
+The air-gap check prints exactly this:
+
+```
+curl: (56) CONNECT tunnel failed, response 403
+```
+
+— visibly a proxy refusal. Describe it as one. The `Dockerfile` has a `--network=none`
+variant for a genuine kernel-level guarantee, with the caveat that it also blocks
+`inference.local`.
+
+### GB10 specifics
+
+On a Dell Pro Max GB10 with a local vLLM, everything above holds except that
+`preflight.sh` will also report a GPU, and the resolved model will be whatever vLLM
+serves rather than an OpenAI-hosted id. Dropping the VLM from the design means there is
+no sm_121 vision-kernel risk and no NIM support-matrix constraint — any instruct text
+model works.
 
 ---
 

@@ -15,6 +15,7 @@ Two implementations behind one interface:
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Protocol
 
@@ -22,8 +23,20 @@ import requests
 
 from careshell.schemas import CareEvent, TimelineEntry
 
-DEFAULT_ENDPOINT = "http://inference.local/v1/chat/completions"
-DEFAULT_MODEL = "nvidia/Nemotron-Nano-12B-v2"
+# NemoClaw exposes its attached inference to the sandbox as `inference.local` over
+# **https**. Plain http is refused by the egress proxy with a 403, so the scheme is not
+# cosmetic. Verified against nemoclaw v0.0.93 / openshell 0.0.85:
+#   nemoclaw <sandbox> exec -- curl -s https://inference.local/v1/models   -> model list
+#   nemoclaw <sandbox> exec -- curl -s  http://inference.local/v1/models   -> 403
+DEFAULT_ENDPOINT = os.environ.get(
+    "CARESHELL_ENDPOINT", "https://inference.local/v1/chat/completions"
+)
+# Overridden per deployment; deploy/deploy.sh resolves the real id from /v1/models.
+DEFAULT_MODEL = os.environ.get("CARESHELL_MODEL", "nvidia/Nemotron-Nano-12B-v2")
+
+# Enough for one CareEvent object. Reasoning models spend hidden tokens against this
+# budget before emitting content, so it cannot be as tight as the JSON alone implies.
+MAX_OUTPUT_TOKENS = int(os.environ.get("CARESHELL_MAX_TOKENS", "512"))
 
 SYSTEM_PROMPT = """You classify a single eldercare observation into one JSON object.
 
@@ -84,6 +97,13 @@ class LLMExtractor:
         self.timeout = timeout
         self.attempts = max(1, attempts)
         self.session = requests.Session()
+        # Negotiated on first use; see _swap_token_param.
+        self._token_param = os.environ.get("CARESHELL_TOKEN_PARAM", "max_tokens")
+        # The sandbox's inference proxy terminates TLS with its own certificate. Trust
+        # it only when explicitly told to -- this is a loopback-equivalent hop inside an
+        # egress-denied sandbox, but it should still be a deliberate choice.
+        if os.environ.get("CARESHELL_INSECURE_TLS") == "1":
+            self.session.verify = False
 
     def _payload(self, entry: TimelineEntry, med_catalog: list[dict]) -> dict:
         catalog = "\n".join(
@@ -105,17 +125,62 @@ class LLMExtractor:
             # {"guided_json": CareEvent.model_json_schema()} -- same effect, vLLM-specific.
             "response_format": {"type": "json_object"},
             "temperature": 0.0,   # the demo must be reproducible
-            "max_tokens": 200,
+            self._token_param: MAX_OUTPUT_TOKENS,
         }
+
+    def _swap_token_param(self, response: requests.Response) -> bool:
+        """Handle servers that disagree on the output-length parameter name.
+
+        vLLM's OpenAI server takes `max_tokens`. Newer OpenAI-hosted models reject it
+        with 400 `unsupported_parameter` and require `max_completion_tokens`. NemoClaw
+        can front either one behind `inference.local`, so rather than hardcoding a guess
+        per deployment, negotiate once on the first rejection and remember the answer.
+
+        Returns True if the parameter was swapped and the request is worth retrying.
+        """
+        if response.status_code != 400:
+            return False
+        try:
+            error = response.json().get("error", {})
+        except ValueError:
+            return False
+        if error.get("code") != "unsupported_parameter":
+            return False
+        if error.get("param") != self._token_param:
+            return False
+
+        alternative = (
+            "max_completion_tokens" if self._token_param == "max_tokens" else "max_tokens"
+        )
+        print(f"[extractor] server rejected {self._token_param!r}, using {alternative!r}")
+        self._token_param = alternative
+        return True
 
     def extract(self, entry: TimelineEntry, med_catalog: list[dict]) -> CareEvent:
         valid_ids = {m["id"] for m in med_catalog}
-        payload = self._payload(entry, med_catalog)
         last_err: Exception | None = None
 
-        for _ in range(self.attempts):
+        # A parameter renegotiation is not a failed attempt, so it gets its own budget
+        # and never eats the retries meant for transient errors.
+        attempts_left = self.attempts
+        swaps_left = 1
+
+        while attempts_left > 0:
+            payload = self._payload(entry, med_catalog)
+
             try:
                 r = self.session.post(self.endpoint, json=payload, timeout=self.timeout)
+            except Exception as exc:          # noqa: BLE001 - transport failure
+                last_err = exc
+                attempts_left -= 1
+                continue
+
+            if swaps_left and self._swap_token_param(r):
+                swaps_left -= 1
+                continue          # renegotiation, not a failed attempt
+
+            attempts_left -= 1
+            try:
                 r.raise_for_status()
                 content = r.json()["choices"][0]["message"]["content"]
                 event = CareEvent(**json.loads(_strip_fence(content)))
